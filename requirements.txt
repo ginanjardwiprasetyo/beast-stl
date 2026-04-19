@@ -3,6 +3,6 @@ pandas
 numpy
 matplotlib
 statsmodels
-supabase
 Rbeast
+psycopg2-binary
 python-dotenv
