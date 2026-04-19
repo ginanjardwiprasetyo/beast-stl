@@ -1,12 +1,8 @@
-faicons
-shiny
-shinywidgets
-plotly
-ridgeplot
+gradio
 pandas
 numpy
 matplotlib
-seaborn
 statsmodels
+supabase
 Rbeast
-gradio
+python-dotenv
