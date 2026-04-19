@@ -383,7 +383,7 @@ with gr.Blocks(
 ) as demo:
 
     gr.Markdown("""
-#Dekomposisi Curah Hujan  
+# Dekomposisi Curah Hujan  
 STL dan BEAST berjalan bersamaan.
 """)
 
@@ -468,4 +468,7 @@ STL dan BEAST berjalan bersamaan.
         ]
     )
 
-demo.queue().launch()(server_name="0.0.0.0", server_port=7860)
+demo.queue().launch(
+    server_name="0.0.0.0",
+    server_port=7860
+)
