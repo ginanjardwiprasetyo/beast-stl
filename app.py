@@ -1,9 +1,11 @@
+# ==========================================================
 # app.py
 # HuggingFace Spaces - Gradio
-# STL + RBEAST + Download PNG
+# Dekomposisi Curah Hujan
+# STL + RBEAST + Supabase + Tema Desktop
+# ==========================================================
 
 import os
-import io
 import zipfile
 import tempfile
 import warnings
@@ -17,11 +19,18 @@ import matplotlib.dates as mdates
 import gradio as gr
 
 from statsmodels.tsa.seasonal import STL
-from Rbeast import beast
 
-# =====================================================
+# jika RBEAST gagal import, tetap jalan
+try:
+    from Rbeast import beast
+    BEAST_READY = True
+except:
+    BEAST_READY = False
+
+
+# ==========================================================
 # DATABASE
-# =====================================================
+# ==========================================================
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 conn = psycopg2.connect(
@@ -29,20 +38,25 @@ conn = psycopg2.connect(
     sslmode="require"
 )
 
-# =====================================================
-# STYLE
-# =====================================================
+
+# ==========================================================
+# STYLE MATPLOTLIB
+# ==========================================================
 plt.rcParams.update({
+    "font.family": "DejaVu Sans",
     "font.size": 11,
     "axes.labelsize": 12,
     "axes.titlesize": 13,
     "xtick.labelsize": 10,
-    "ytick.labelsize": 10
+    "ytick.labelsize": 10,
+    "axes.facecolor": "white",
+    "figure.facecolor": "white"
 })
 
-# =====================================================
+
+# ==========================================================
 # LIST POS
-# =====================================================
+# ==========================================================
 def get_pos():
 
     sql = """
@@ -63,9 +77,9 @@ def get_pos():
     return pilihan
 
 
-# =====================================================
-# DATA
-# =====================================================
+# ==========================================================
+# AMBIL DATA
+# ==========================================================
 def ambil_data(pos_id, th1, th2):
 
     sql = """
@@ -83,19 +97,15 @@ def ambil_data(pos_id, th1, th2):
     )
 
     df["tanggal"] = pd.to_datetime(df["tanggal"])
-    df["rain"] = pd.to_numeric(
-        df["rain"],
-        errors="coerce"
-    )
-
+    df["rain"] = pd.to_numeric(df["rain"], errors="coerce")
     df = df.dropna()
 
     return df
 
 
-# =====================================================
+# ==========================================================
 # AGREGASI
-# =====================================================
+# ==========================================================
 def agregasi(df, periode, metode):
 
     d = df.copy()
@@ -108,33 +118,27 @@ def agregasi(df, periode, metode):
 
         grp = d.resample("MS")
 
-        if metode == "Kumulatif":
-            out = grp.sum()
-
-        elif metode == "Rerata":
+        if metode == "Rerata":
             out = grp.mean()
-
         elif metode == "Minimum":
             out = grp.min()
-
-        else:
+        elif metode == "Maksimum":
             out = grp.max()
+        else:
+            out = grp.sum()
 
     else:
 
         grp = d.resample("YS")
 
-        if metode == "Kumulatif":
-            out = grp.sum()
-
-        elif metode == "Rerata":
+        if metode == "Rerata":
             out = grp.mean()
-
         elif metode == "Minimum":
             out = grp.min()
-
-        else:
+        elif metode == "Maksimum":
             out = grp.max()
+        else:
+            out = grp.sum()
 
     out = out.dropna()
     out["rain"] = out["rain"].round(0)
@@ -142,23 +146,22 @@ def agregasi(df, periode, metode):
     return out
 
 
-# =====================================================
+# ==========================================================
 # STL
-# =====================================================
+# ==========================================================
 def plot_stl(data):
 
     y = data["rain"]
 
-    if len(y) < 24:
-        raise Exception("Data terlalu sedikit.")
+    period = 12 if len(y) >= 24 else max(2, int(len(y)/2))
 
-    model = STL(
+    stl = STL(
         y,
-        period=12,
+        period=period,
         robust=True
     )
 
-    r = model.fit()
+    r = stl.fit()
 
     fig, ax = plt.subplots(
         3,1,
@@ -167,13 +170,13 @@ def plot_stl(data):
     )
 
     ax[0].plot(data.index, r.trend, color="green")
-    ax[0].set_ylabel("Tren")
+    ax[0].set_ylabel("Tren (mm)")
 
     ax[1].plot(data.index, r.seasonal, color="red")
-    ax[1].set_ylabel("Musiman")
+    ax[1].set_ylabel("Musiman (mm)")
 
     ax[2].plot(data.index, r.resid, color="gray")
-    ax[2].set_ylabel("Residu")
+    ax[2].set_ylabel("Residu (mm)")
     ax[2].set_xlabel("Tahun")
 
     for a in ax:
@@ -184,12 +187,25 @@ def plot_stl(data):
     return fig
 
 
-# =====================================================
+# ==========================================================
 # RBEAST
-# =====================================================
+# ==========================================================
 def plot_beast(data):
 
+    if not BEAST_READY:
+        fig, ax = plt.subplots(figsize=(10,4))
+        ax.text(
+            0.5,0.5,
+            "RBEAST tidak tersedia di server",
+            ha="center",
+            va="center",
+            fontsize=14
+        )
+        ax.axis("off")
+        return fig
+
     try:
+
         y = data["rain"].astype(float).values
 
         hasil = beast(
@@ -211,22 +227,23 @@ def plot_beast(data):
         )
 
         ax[0].plot(data.index, trend, color="green")
-        ax[0].set_ylabel("Tren")
+        ax[0].set_ylabel("Tren (mm)")
 
         ax[1].plot(data.index, seasonal, color="red")
-        ax[1].set_ylabel("Musiman")
+        ax[1].set_ylabel("Musiman (mm)")
 
         ax[2].plot(data.index, resid, color="gray")
-        ax[2].set_ylabel("Residu")
+        ax[2].set_ylabel("Residu (mm)")
         ax[2].set_xlabel("Tahun")
 
         for a in ax:
             a.grid(alpha=0.25)
 
         plt.tight_layout()
+
         return fig
 
-    except Exception:
+    except:
 
         fig, ax = plt.subplots(figsize=(10,4))
         ax.text(
@@ -238,10 +255,11 @@ def plot_beast(data):
         )
         ax.axis("off")
         return fig
-        
-# =====================================================
-# SAVE PNG ZIP
-# =====================================================
+
+
+# ==========================================================
+# ZIP DOWNLOAD
+# ==========================================================
 def simpan_zip(fig1, fig2, nama, th1, th2):
 
     tmp = tempfile.NamedTemporaryFile(
@@ -261,22 +279,10 @@ def simpan_zip(fig1, fig2, nama, th1, th2):
         suffix=".png"
     ).name
 
-    fig1.savefig(
-        png1,
-        dpi=200,
-        bbox_inches="tight"
-    )
+    fig1.savefig(png1, dpi=220, bbox_inches="tight")
+    fig2.savefig(png2, dpi=220, bbox_inches="tight")
 
-    fig2.savefig(
-        png2,
-        dpi=200,
-        bbox_inches="tight"
-    )
-
-    with zipfile.ZipFile(
-        zip_path,
-        "w"
-    ) as z:
+    with zipfile.ZipFile(zip_path, "w") as z:
 
         z.write(
             png1,
@@ -291,43 +297,37 @@ def simpan_zip(fig1, fig2, nama, th1, th2):
     return zip_path
 
 
-# =====================================================
+# ==========================================================
 # PROSES
-# =====================================================
+# ==========================================================
 def proses(pos_id, periode, metode, th1, th2):
 
-    nama_pos = dict(get_pos())[pos_id]
-
-    df = ambil_data(
-        pos_id,
-        th1,
-        th2
+    nama_pos = next(
+        nama for nama, pid in get_pos()
+        if pid == pos_id
     )
 
-    if df.empty:
-        raise gr.Error("Data kosong.")
+    df = ambil_data(pos_id, th1, th2)
 
-    # availability
-    hari_total = (
+    if df.empty:
+        raise gr.Error("Data tidak ditemukan.")
+
+    total_hari = len(
         pd.date_range(
             f"{th1}-01-01",
             f"{th2}-12-31",
             freq="D"
-        ).size
+        )
     )
 
-    hari_ada = len(df)
+    tersedia = len(df)
 
     persen = round(
-        hari_ada / hari_total * 100,
+        tersedia / total_hari * 100,
         2
     )
 
-    data = agregasi(
-        df,
-        periode,
-        metode
-    )
+    data = agregasi(df, periode, metode)
 
     fig1 = plot_stl(data)
     fig2 = plot_beast(data)
@@ -340,72 +340,78 @@ def proses(pos_id, periode, metode, th1, th2):
         th2
     )
 
-    ringkasan = f"""
-Pos Hujan : {nama_pos}
-Periode : {periode}
-Metode : {metode}
-Rentang Tahun : {th1}-{th2}
+    teks = f"""
+Pos Hujan        : {nama_pos}
+Rentang Tahun    : {th1} - {th2}
+Periode Olahan   : {periode}
+Metode Olahan    : {metode}
 
-Data tersedia : {hari_ada:,} hari
-Data seharusnya : {hari_total:,} hari
-Ketersediaan : {persen} %
+Data Tersedia    : {tersedia:,} hari
+Data Seharusnya  : {total_hari:,} hari
+Ketersediaan     : {persen} %
 
-Jumlah data olahan : {len(data):,}
+Jumlah Data Jadi : {len(data):,}
 """
 
-    return fig1, fig2, ringkasan, zip_file
+    return fig1, fig2, teks, zip_file
 
 
-# =====================================================
-# DROPDOWN DINAMIS
-# =====================================================
+# ==========================================================
+# DINAMIS
+# ==========================================================
 def ubah_metode(periode):
 
     if periode == "Harian":
-        return gr.update(
-            visible=False
-        )
+        return gr.update(visible=False)
 
-    return gr.update(
-        visible=True
-    )
+    return gr.update(visible=True)
 
 
-# =====================================================
-# UI
-# =====================================================
-tema = gr.themes.Soft()
-
+# ==========================================================
+# CSS DESKTOP
+# ==========================================================
 css = """
-.gradio-container{
-    max-width:1450px !important;
-    margin:auto !important;
-    font-family:'Poppins',sans-serif !important;
+body{
+    background:#edf2f7;
 }
 
-footer{display:none !important;}
+.gradio-container{
+    max-width:1600px !important;
+    margin:auto !important;
+    font-family:Arial,sans-serif !important;
+}
 
-@media (max-width:900px){
-    body{
-        zoom:0.8;
-    }
+footer{
+    display:none !important;
+}
+
+textarea{
+    font-size:15px !important;
+}
+
+h1,h2,h3{
+    text-align:center;
+}
+
+button{
+    height:52px !important;
+    font-size:16px !important;
 }
 """
 
-gr.HTML("""
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
-""")
 
+# ==========================================================
+# UI
+# ==========================================================
 with gr.Blocks(
-    theme=tema,
-    title="Dekomposisi Curah Hujan",
+    title="Curah Hujan",
     css=css
 ) as demo:
 
     gr.Markdown("""
-# Dekomposisi Curah Hujan  
-STL dan BEAST berjalan bersamaan.
+# 🌧️ Dekomposisi Curah Hujan
+
+STL dan RBEAST berjalan bersamaan.
 """)
 
     with gr.Row():
@@ -448,12 +454,12 @@ STL dan BEAST berjalan bersamaan.
             label="Tahun Akhir"
         )
 
-    btn = gr.Button(
-        "Proses",
+    tombol = gr.Button(
+        "Proses Data",
         variant="primary"
     )
 
-    info = gr.Textbox(
+    ringkasan = gr.Textbox(
         label="Ringkasan",
         lines=10
     )
@@ -472,7 +478,7 @@ STL dan BEAST berjalan bersamaan.
         outputs=metode
     )
 
-    btn.click(
+    tombol.click(
         fn=proses,
         inputs=[
             pos,
@@ -484,12 +490,17 @@ STL dan BEAST berjalan bersamaan.
         outputs=[
             out1,
             out2,
-            info,
+            ringkasan,
             unduh
         ]
     )
 
-demo.queue().launch(
-    server_name="0.0.0.0",
-    server_port=7860
-)
+# ==========================================================
+# RUN
+# ==========================================================
+if __name__ == "__main__":
+
+    demo.queue().launch(
+        server_name="0.0.0.0",
+        server_port=7860
+    )
