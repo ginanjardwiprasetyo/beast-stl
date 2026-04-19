@@ -204,7 +204,29 @@ def plot_beast(data):
         seasonal = hasil.season.Y
         resid = y - trend - seasonal
 
-    except Exception as e:
+        fig, ax = plt.subplots(
+            3,1,
+            figsize=(12,8),
+            sharex=True
+        )
+
+        ax[0].plot(data.index, trend, color="green")
+        ax[0].set_ylabel("Tren")
+
+        ax[1].plot(data.index, seasonal, color="red")
+        ax[1].set_ylabel("Musiman")
+
+        ax[2].plot(data.index, resid, color="gray")
+        ax[2].set_ylabel("Residu")
+        ax[2].set_xlabel("Tahun")
+
+        for a in ax:
+            a.grid(alpha=0.25)
+
+        plt.tight_layout()
+        return fig
+
+    except Exception:
 
         fig, ax = plt.subplots(figsize=(10,4))
         ax.text(
@@ -216,8 +238,7 @@ def plot_beast(data):
         )
         ax.axis("off")
         return fig
-
-
+        
 # =====================================================
 # SAVE PNG ZIP
 # =====================================================
