@@ -1,7 +1,8 @@
 # ==========================================================
 # app.py
 # HuggingFace Spaces - Gradio
-# STL + RBEAST + Cek Data + Loader + Supabase
+# Dashboard Curah Hujan
+# STL + RBEAST + Loader + Cek Data + Elegan UI
 # ==========================================================
 
 import os
@@ -10,16 +11,18 @@ import tempfile
 import warnings
 warnings.filterwarnings("ignore")
 
+import numpy as np
 import pandas as pd
 import psycopg2
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import gradio as gr
 
 from statsmodels.tsa.seasonal import STL
 
-# ----------------------------------------------------------
+# ==========================================================
 # OPTIONAL RBEAST
-# ----------------------------------------------------------
+# ==========================================================
 try:
     from Rbeast import beast
     BEAST_READY = True
@@ -39,7 +42,7 @@ conn = psycopg2.connect(
 
 
 # ==========================================================
-# MATPLOTLIB
+# MATPLOTLIB STYLE
 # ==========================================================
 plt.rcParams.update({
     "font.family": "DejaVu Sans",
@@ -52,7 +55,7 @@ plt.rcParams.update({
 
 
 # ==========================================================
-# POS HUJAN
+# LIST POS
 # ==========================================================
 def get_pos():
 
@@ -96,9 +99,7 @@ def ambil_data(pos_id, th1, th2):
     df["tanggal"] = pd.to_datetime(df["tanggal"])
     df["rain"] = pd.to_numeric(df["rain"], errors="coerce")
 
-    df = df.dropna()
-
-    return df
+    return df.dropna()
 
 
 # ==========================================================
@@ -106,8 +107,7 @@ def ambil_data(pos_id, th1, th2):
 # ==========================================================
 def agregasi(df, periode, metode):
 
-    d = df.copy()
-    d = d.set_index("tanggal")
+    d = df.copy().set_index("tanggal")
 
     if periode == "Harian":
         out = d.resample("D").sum()
@@ -169,7 +169,6 @@ def cek_data(pos_id, th1, th2):
 
     ada = len(df)
     hilang = total - ada
-
     persen = round((ada / total) * 100, 2)
 
     if persen >= 90:
@@ -181,25 +180,44 @@ def cek_data(pos_id, th1, th2):
     else:
         status = "🔴 Buruk"
 
-    teks = f"""
+    return f"""
 Pos Hujan       : {nama}
 Rentang Tahun   : {int(th1)} - {int(th2)}
-
 Data Ada        : {ada:,} hari
 Data Hilang     : {hilang:,} hari
 Data Seharusnya : {total:,} hari
-
 Ketersediaan    : {persen} %
 Status          : {status}
 """
 
-    return teks
+
+# ==========================================================
+# OUTLIER
+# ==========================================================
+def hitung_outlier(data):
+
+    q1 = data["rain"].quantile(0.25)
+    q3 = data["rain"].quantile(0.75)
+    iqr = q3 - q1
+
+    bawah = q1 - 1.5 * iqr
+    atas = q3 + 1.5 * iqr
+
+    out = data[
+        (data["rain"] < bawah) |
+        (data["rain"] > atas)
+    ]
+
+    return len(out)
 
 
 # ==========================================================
 # STL
 # ==========================================================
 def plot_stl(data):
+
+    data = data.copy()
+    data["rain"] = data["rain"].ffill(limit=3)
 
     y = data["rain"]
 
@@ -214,30 +232,36 @@ def plot_stl(data):
     r = model.fit()
 
     fig, ax = plt.subplots(
-        3,1,
-        figsize=(12,8),
+        3, 1,
+        figsize=(13, 8),
         sharex=True
     )
 
-    ax[0].plot(data.index, r.trend, color="green")
+    fig.patch.set_facecolor("white")
+
+    warna = ["#22c55e", "#ef4444", "#94a3b8"]
+
+    ax[0].plot(data.index, r.trend, color=warna[0], lw=2)
     ax[0].set_ylabel("Tren")
 
-    ax[1].plot(data.index, r.seasonal, color="red")
+    ax[1].plot(data.index, r.seasonal, color=warna[1], lw=1.7)
     ax[1].set_ylabel("Musiman")
 
-    ax[2].plot(data.index, r.resid, color="gray")
+    ax[2].plot(data.index, r.resid, color=warna[2], lw=1.3)
     ax[2].set_ylabel("Residu")
     ax[2].set_xlabel("Tahun")
 
     for a in ax:
-        a.grid(alpha=0.25)
+        a.grid(alpha=0.18)
+        a.spines["top"].set_visible(False)
+        a.spines["right"].set_visible(False)
 
     plt.tight_layout()
     return fig
 
 
 # ==========================================================
-# RBEAST
+# BEAST
 # ==========================================================
 def plot_beast(data):
 
@@ -256,7 +280,8 @@ def plot_beast(data):
             start=data.index[0].year,
             deltat=1/12,
             freq=12,
-            season="harmonic"
+            season="harmonic",
+            hasOutlier=True
         )
 
         trend = hasil.trend.Y
@@ -265,22 +290,38 @@ def plot_beast(data):
 
         fig, ax = plt.subplots(
             3,1,
-            figsize=(12,8),
+            figsize=(13,8),
             sharex=True
         )
 
-        ax[0].plot(data.index, trend, color="green")
+        warna = ["#16a34a", "#dc2626", "#64748b"]
+
+        ax[0].plot(data.index, trend, color=warna[0], lw=2)
+
+        try:
+            sd = hasil.trend.SD
+            ax[0].fill_between(
+                data.index,
+                trend - sd,
+                trend + sd,
+                alpha=0.18
+            )
+        except:
+            pass
+
         ax[0].set_ylabel("Tren")
 
-        ax[1].plot(data.index, seasonal, color="red")
+        ax[1].plot(data.index, seasonal, color=warna[1], lw=1.7)
         ax[1].set_ylabel("Musiman")
 
-        ax[2].plot(data.index, resid, color="gray")
+        ax[2].plot(data.index, resid, color=warna[2], lw=1.2)
         ax[2].set_ylabel("Residu")
         ax[2].set_xlabel("Tahun")
 
         for a in ax:
-            a.grid(alpha=0.25)
+            a.grid(alpha=0.18)
+            a.spines["top"].set_visible(False)
+            a.spines["right"].set_visible(False)
 
         plt.tight_layout()
         return fig
@@ -294,7 +335,7 @@ def plot_beast(data):
 
 
 # ==========================================================
-# ZIP PNG
+# ZIP
 # ==========================================================
 def simpan_zip(fig1, fig2, nama, th1, th2):
 
@@ -303,15 +344,8 @@ def simpan_zip(fig1, fig2, nama, th1, th2):
         suffix=".zip"
     ).name
 
-    p1 = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".png"
-    ).name
-
-    p2 = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".png"
-    ).name
+    p1 = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+    p2 = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
 
     fig1.savefig(p1, dpi=220, bbox_inches="tight")
     fig2.savefig(p2, dpi=220, bbox_inches="tight")
@@ -348,14 +382,20 @@ def proses(pos_id, periode, metode, th1, th2):
 
     data = agregasi(df, periode, metode)
 
+    outlier = hitung_outlier(data)
+
     fig1 = plot_stl(data)
     fig2 = plot_beast(data)
 
-    zip_file = simpan_zip(
-        fig1, fig2, nama, th1, th2
-    )
+    zip_file = simpan_zip(fig1, fig2, nama, th1, th2)
 
-    ringkas = cek_data(pos_id, th1, th2)
+    ringkas = cek_data(pos_id, th1, th2) + f"""
+
+Jumlah Data Olahan : {len(data):,}
+Outlier Terdeteksi : {outlier:,}
+STL Robust         : True
+BEAST Outlier      : True
+"""
 
     return (
         gr.update(visible=False),
@@ -368,7 +408,7 @@ def proses(pos_id, periode, metode, th1, th2):
 
 
 # ==========================================================
-# SHOW / HIDE METODE
+# SHOW HIDE
 # ==========================================================
 def ubah_metode(periode):
 
@@ -379,49 +419,48 @@ def ubah_metode(periode):
 
 
 # ==========================================================
-# CSS DESKTOP
+# CSS
 # ==========================================================
 css = """
 body{
-    background:#eef2f7;
+background:linear-gradient(180deg,#f8fafc,#eef2ff);
 }
 
 .gradio-container{
-    max-width:1850px !important;
-    margin:auto !important;
-    padding:25px 45px !important;
-    font-family:Arial,sans-serif !important;
+max-width:1900px !important;
+margin:auto !important;
+padding:28px 40px !important;
+font-family:Inter,Arial,sans-serif !important;
 }
 
-h1,h2,h3{
-    text-align:center;
-}
+footer{display:none !important;}
 
 textarea{
-    font-size:15px !important;
+font-size:15px !important;
 }
 
 button{
-    height:52px !important;
-    font-size:16px !important;
+height:52px !important;
+border-radius:14px !important;
+font-weight:600 !important;
 }
 
 #loaderbox{
-    text-align:center;
-    background:white;
-    padding:40px;
-    border-radius:18px;
-    box-shadow:0 8px 20px rgba(0,0,0,.05);
+text-align:center;
+background:white;
+padding:40px;
+border-radius:22px;
+box-shadow:0 10px 30px rgba(0,0,0,.06);
 }
 
 .spin{
-    width:56px;
-    height:56px;
-    border:6px solid #dbeafe;
-    border-top:6px solid #2563eb;
-    border-radius:50%;
-    margin:auto;
-    animation:putar 1s linear infinite;
+width:58px;
+height:58px;
+border:6px solid #dbeafe;
+border-top:6px solid #2563eb;
+border-radius:50%;
+margin:auto;
+animation:putar 1s linear infinite;
 }
 
 @keyframes putar{
@@ -430,9 +469,10 @@ to{transform:rotate(360deg)}
 }
 
 #timer{
-    margin-top:18px;
-    font-size:18px;
-    font-weight:600;
+margin-top:18px;
+font-size:18px;
+font-weight:600;
+color:#334155;
 }
 """
 
@@ -440,15 +480,12 @@ to{transform:rotate(360deg)}
 # ==========================================================
 # UI
 # ==========================================================
-with gr.Blocks(
-    title="Curah Hujan",
-    css=css
-) as demo:
+with gr.Blocks(css=css, title="Curah Hujan") as demo:
 
     gr.Markdown("""
 # 🌧️ Dashboard Dekomposisi Curah Hujan
 
-Cek data dahulu, lalu olah dengan STL dan RBEAST.
+Visual lembut, data jelas, hasil ilmiah rapi.
 """)
 
     with gr.Row():
@@ -456,6 +493,7 @@ Cek data dahulu, lalu olah dengan STL dan RBEAST.
         pos = gr.Dropdown(
             choices=get_pos(),
             label="Pos Hujan",
+            filterable=True,
             scale=3
         )
 
@@ -475,25 +513,14 @@ Cek data dahulu, lalu olah dengan STL dan RBEAST.
 
     with gr.Row():
 
-        th1 = gr.Number(
-            value=1980,
-            label="Tahun Awal"
-        )
-
-        th2 = gr.Number(
-            value=2025,
-            label="Tahun Akhir"
-        )
+        th1 = gr.Number(value=1980, label="Tahun Awal")
+        th2 = gr.Number(value=2025, label="Tahun Akhir")
 
     with gr.Row():
-
         btn_cek = gr.Button("🔍 Cek Ketersediaan Data")
         btn_proses = gr.Button("⚙️ Proses Data", variant="primary")
 
-    cek_box = gr.Textbox(
-        label="Status Data",
-        lines=10
-    )
+    cek_box = gr.Textbox(label="Status Data", lines=10)
 
     loader = gr.HTML("""
 <div id="loaderbox" style="display:none;">
@@ -506,22 +533,14 @@ Cek data dahulu, lalu olah dengan STL dan RBEAST.
 
     with hasil:
 
-        ringkasan = gr.Textbox(
-            label="Ringkasan",
-            lines=10
-        )
+        ringkasan = gr.Textbox(label="Ringkasan", lines=12)
 
         with gr.Row():
             out1 = gr.Plot(label="STL")
             out2 = gr.Plot(label="RBEAST")
 
-        unduh = gr.File(
-            label="Unduh PNG (ZIP)"
-        )
+        unduh = gr.File(label="Unduh PNG (ZIP)")
 
-    # --------------------------------------
-    # EVENT
-    # --------------------------------------
     periode.change(
         fn=ubah_metode,
         inputs=periode,
@@ -535,19 +554,19 @@ Cek data dahulu, lalu olah dengan STL dan RBEAST.
     )
 
     btn_proses.click(
-    fn=lambda: (
-        gr.update(
-            value="""
+        fn=lambda: (
+            gr.update(
+                value="""
 <div id='loaderbox'>
 <div class='spin'></div>
 <div id='timer'>Memproses... 0 detik</div>
 </div>
 """
+            ),
+            gr.update(visible=False)
         ),
-        gr.update(visible=False)
-    ),
-    outputs=[loader, cek_box],
-    js="""
+        outputs=[loader, cek_box],
+        js="""
 () => {
 let box=document.getElementById("loaderbox");
 if(box){box.style.display="block";}
@@ -559,17 +578,10 @@ if(t){t.innerText="Memproses... "+window.detik+" detik";}
 },1000);
 }
 """
-).then(
+    ).then(
         fn=proses,
         inputs=[pos, periode, metode, th1, th2],
-        outputs=[
-            loader,
-            hasil,
-            ringkasan,
-            out1,
-            out2,
-            unduh
-        ]
+        outputs=[loader, hasil, ringkasan, out1, out2, unduh]
     ).then(
         fn=lambda: None,
         js="""
