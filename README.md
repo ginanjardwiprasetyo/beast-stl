@@ -1,10 +1,8 @@
 ---
-title: Rbeast Curah Hujan
+title: Curah Hujan BEAST STL
 emoji: 🌧️
+sdk: gradio
+app_file: app.py
 colorFrom: blue
 colorTo: green
-sdk: gradio
-sdk_version: 6.12.0
-app_file: app.py
-pinned: false
 ---
