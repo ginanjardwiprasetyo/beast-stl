@@ -189,85 +189,33 @@ def plot_stl(data):
 # =====================================================
 def plot_beast(data):
 
-    y = data["rain"].values.astype(float)
+    try:
+        y = data["rain"].astype(float).values
 
-    start_year = (
-        data.index[0].year +
-        (data.index[0].month - 1)/12
-    )
+        hasil = beast(
+            y,
+            start=data.index[0].year,
+            deltat=1/12,
+            freq=12,
+            season="harmonic"
+        )
 
-    hasil = beast(
-        y,
-        start=start_year,
-        deltat=1/12,
-        freq=12,
-        season="harmonic"
-    )
+        trend = hasil.trend.Y
+        seasonal = hasil.season.Y
+        resid = y - trend - seasonal
 
-    trend = hasil.trend.Y
-    sd = hasil.trend.SD
-    seasonal = hasil.season.Y
-    resid = y - trend - seasonal
+    except Exception as e:
 
-    cp = hasil.trend.cp
-
-    fig, ax = plt.subplots(
-        3,1,
-        figsize=(12,8),
-        sharex=True
-    )
-
-    # trend
-    ax[0].plot(
-        data.index,
-        trend,
-        color="green"
-    )
-
-    ax[0].fill_between(
-        data.index,
-        trend - sd,
-        trend + sd,
-        alpha=0.25,
-        color="green"
-    )
-
-    # changepoint
-    if cp is not None:
-        for c in cp:
-            if c < len(data):
-                ax[0].axvline(
-                    data.index[int(c)],
-                    color="black",
-                    linestyle="--",
-                    alpha=0.5
-                )
-
-    ax[0].set_ylabel("Tren")
-
-    # seasonal
-    ax[1].plot(
-        data.index,
-        seasonal,
-        color="red"
-    )
-    ax[1].set_ylabel("Musiman")
-
-    # resid
-    ax[2].plot(
-        data.index,
-        resid,
-        color="gray"
-    )
-    ax[2].set_ylabel("Residu")
-    ax[2].set_xlabel("Tahun")
-
-    for a in ax:
-        a.grid(alpha=0.25)
-
-    plt.tight_layout()
-
-    return fig
+        fig, ax = plt.subplots(figsize=(10,4))
+        ax.text(
+            0.5,0.5,
+            "RBEAST gagal dijalankan",
+            ha="center",
+            va="center",
+            fontsize=14
+        )
+        ax.axis("off")
+        return fig
 
 
 # =====================================================
@@ -409,20 +357,34 @@ tema = gr.themes.Soft()
 
 css = """
 .gradio-container{
-max-width:1400px !important;
-margin:auto !important;
+    max-width:1450px !important;
+    margin:auto !important;
+    font-family:'Poppins',sans-serif !important;
+}
+
+footer{display:none !important;}
+
+@media (max-width:900px){
+    body{
+        zoom:0.8;
+    }
 }
 """
 
+gr.HTML("""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+""")
+
 with gr.Blocks(
     theme=tema,
-    title="Curah Hujan",
+    title="Dekomposisi Curah Hujan",
     css=css
 ) as demo:
 
     gr.Markdown("""
-# 🌧️ Dashboard Curah Hujan  
-STL dan RBEAST berjalan bersamaan.
+#Dekomposisi Curah Hujan  
+STL dan BEAST berjalan bersamaan.
 """)
 
     with gr.Row():
@@ -506,4 +468,4 @@ STL dan RBEAST berjalan bersamaan.
         ]
     )
 
-demo.launch(server_name="0.0.0.0", server_port=7860)
+demo.queue().launch()(server_name="0.0.0.0", server_port=7860)
