@@ -1,162 +1,237 @@
-import faicons as fa
-import plotly.express as px
+# app.py
+# Hugging Face Spaces / Gradio
+# Rbeast Curah Hujan - Python version dari kode R Anda
 
-# Load data and compute static values
-from shared import app_dir, tips
-from shinywidgets import render_plotly
+import io
+import tempfile
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import gradio as gr
+from Rbeast import beast
 
-from shiny import reactive, render
-from shiny.express import input, ui
+# ===============================
+# TEMA MATPLOTLIB
+# ===============================
+plt.rcParams.update({
+    "font.size": 12,
+    "axes.labelsize": 13,
+    "axes.titlesize": 14,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "figure.facecolor": "white",
+    "axes.facecolor": "white"
+})
 
-bill_rng = (min(tips.total_bill), max(tips.total_bill))
+# ===============================
+# FUNGSI PROSES
+# ===============================
+def proses_beast(file):
 
-# Add page title and sidebar
-ui.page_opts(title="Restaurant tipping", fillable=True)
+    if file is None:
+        raise gr.Error("Silakan unggah file CSV terlebih dahulu.")
 
-with ui.sidebar(open="desktop"):
-    ui.input_slider(
-        "total_bill",
-        "Bill amount",
-        min=bill_rng[0],
-        max=bill_rng[1],
-        value=bill_rng,
-        pre="$",
+    # =========================
+    # BACA CSV
+    # =========================
+    df = pd.read_csv(
+        file.name,
+        sep=";",
+        encoding="utf-8-sig"
     )
-    ui.input_checkbox_group(
-        "time",
-        "Food service",
-        ["Lunch", "Dinner"],
-        selected=["Lunch", "Dinner"],
-        inline=True,
-    )
-    ui.input_action_button("reset", "Reset filter")
 
-# Add main content
-ICONS = {
-    "user": fa.icon_svg("user", "regular"),
-    "wallet": fa.icon_svg("wallet"),
-    "currency-dollar": fa.icon_svg("dollar-sign"),
-    "ellipsis": fa.icon_svg("ellipsis"),
+    df.columns = ["Tanggal", "Data"]
+
+    # =========================
+    # KONVERSI
+    # =========================
+    df["Tanggal"] = pd.to_datetime(
+        df["Tanggal"],
+        format="%d/%m/%y",
+        errors="coerce"
+    )
+
+    df["Data"] = pd.to_numeric(
+        df["Data"],
+        errors="coerce"
+    )
+
+    df = df.dropna(subset=["Tanggal"])
+
+    # =========================
+    # BULANAN
+    # =========================
+    df["year"] = df["Tanggal"].dt.year
+    df["month"] = df["Tanggal"].dt.month
+
+    df_monthly = (
+        df.groupby(["year", "month"])["Data"]
+        .sum()
+        .reset_index()
+    )
+
+    df_monthly.columns = ["year", "month", "rain"]
+
+    # =========================
+    # DATA TIME SERIES
+    # =========================
+    y = df_monthly["rain"].values.astype(float)
+
+    start_year = (
+        df_monthly.loc[0, "year"] +
+        (df_monthly.loc[0, "month"] - 1) / 12
+    )
+
+    # =========================
+    # BEAST
+    # =========================
+    hasil = beast(
+        y,
+        start=start_year,
+        deltat=1/12,
+        freq=12,
+        season="harmonic"
+    )
+
+    trend = hasil.trend.Y
+    seasonal = hasil.season.Y
+    resid = y - trend - seasonal
+
+    # =========================
+    # INDEX TANGGAL
+    # =========================
+    dates = pd.date_range(
+        start=f"{df_monthly.loc[0,'year']}-{df_monthly.loc[0,'month']:02d}-01",
+        periods=len(y),
+        freq="MS"
+    )
+
+    # =========================
+    # PLOT
+    # =========================
+    fig, axes = plt.subplots(
+        3, 1,
+        figsize=(12, 8),
+        sharex=True
+    )
+
+    locator = mdates.YearLocator(10)
+    formatter = mdates.DateFormatter("%Y")
+
+    # Tren
+    axes[0].plot(
+        dates, trend,
+        color="green",
+        linewidth=2
+    )
+    axes[0].set_ylabel("Tren (mm)")
+    axes[0].grid(alpha=0.25)
+
+    # Musiman
+    axes[1].plot(
+        dates, seasonal,
+        color="red",
+        linewidth=1.5
+    )
+    axes[1].set_ylabel("Musiman (mm)")
+    axes[1].grid(alpha=0.25)
+
+    # Residu
+    axes[2].plot(
+        dates, resid,
+        color="darkgray",
+        linewidth=1.2
+    )
+    axes[2].set_ylabel("Residu (mm)")
+    axes[2].set_xlabel("Tahun")
+    axes[2].grid(alpha=0.25)
+
+    for ax in axes:
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(formatter)
+
+    plt.tight_layout()
+
+    # =========================
+    # RINGKASAN
+    # =========================
+    teks = f"""
+Jumlah data harian : {len(df):,}
+Jumlah data bulanan : {len(df_monthly):,}
+Periode awal : {dates.min().strftime('%Y-%m')}
+Periode akhir : {dates.max().strftime('%Y-%m')}
+Metode : BEAST Harmonic Seasonal
+    """
+
+    return fig, teks
+
+
+# ===============================
+# TEMA HF / GRADIO
+# ===============================
+tema = gr.themes.Soft(
+    primary_hue="blue",
+    secondary_hue="slate",
+    neutral_hue="gray"
+)
+
+css = """
+body{
+    background:#f4f6f9;
 }
+.gradio-container{
+    max-width:1100px !important;
+}
+h1{
+    text-align:center;
+}
+"""
 
-with ui.layout_columns(fill=False):
-    with ui.value_box(showcase=ICONS["user"]):
-        "Total tippers"
+# ===============================
+# UI
+# ===============================
+with gr.Blocks(theme=tema, css=css, title="Rbeast Curah Hujan") as demo:
 
-        @render.express
-        def total_tippers():
-            tips_data().shape[0]
+    gr.Markdown("""
+# 🌧️ Dekomposisi Curah Hujan dengan Rbeast
 
-    with ui.value_box(showcase=ICONS["wallet"]):
-        "Average tip"
+Unggah file CSV berformat:
 
-        @render.express
-        def average_tip():
-            d = tips_data()
-            if d.shape[0] > 0:
-                perc = d.tip / d.total_bill
-                f"{perc.mean():.1%}"
+`Tanggal;Data`
 
-    with ui.value_box(showcase=ICONS["currency-dollar"]):
-        "Average bill"
+Contoh:
 
-        @render.express
-        def average_bill():
-            d = tips_data()
-            if d.shape[0] > 0:
-                bill = d.total_bill.mean()
-                f"${bill:.2f}"
+`01/01/80;33`
+""")
 
+    with gr.Row():
+        file_input = gr.File(
+            label="Unggah CSV",
+            file_types=[".csv"]
+        )
 
-with ui.layout_columns(col_widths=[6, 6, 12]):
-    with ui.card(full_screen=True):
-        ui.card_header("Tips data")
+    tombol = gr.Button(
+        "Proses Data",
+        variant="primary"
+    )
 
-        @render.data_frame
-        def table():
-            return render.DataGrid(tips_data())
+    hasil_plot = gr.Plot(
+        label="Hasil Dekomposisi"
+    )
 
-    with ui.card(full_screen=True):
-        with ui.card_header(class_="d-flex justify-content-between align-items-center"):
-            "Total bill vs tip"
-            with ui.popover(title="Add a color variable", placement="top"):
-                ICONS["ellipsis"]
-                ui.input_radio_buttons(
-                    "scatter_color",
-                    None,
-                    ["none", "sex", "smoker", "day", "time"],
-                    inline=True,
-                )
+    hasil_text = gr.Textbox(
+        label="Ringkasan",
+        lines=8
+    )
 
-        @render_plotly
-        def scatterplot():
-            color = input.scatter_color()
-            return px.scatter(
-                tips_data(),
-                x="total_bill",
-                y="tip",
-                color=None if color == "none" else color,
-                trendline="lowess",
-            )
+    tombol.click(
+        fn=proses_beast,
+        inputs=file_input,
+        outputs=[hasil_plot, hasil_text]
+    )
 
-    with ui.card(full_screen=True):
-        with ui.card_header(class_="d-flex justify-content-between align-items-center"):
-            "Tip percentages"
-            with ui.popover(title="Add a color variable"):
-                ICONS["ellipsis"]
-                ui.input_radio_buttons(
-                    "tip_perc_y",
-                    "Split by:",
-                    ["sex", "smoker", "day", "time"],
-                    selected="day",
-                    inline=True,
-                )
-
-        @render_plotly
-        def tip_perc():
-            from ridgeplot import ridgeplot
-
-            dat = tips_data()
-            dat["percent"] = dat.tip / dat.total_bill
-            yvar = input.tip_perc_y()
-            uvals = dat[yvar].unique()
-
-            samples = [[dat.percent[dat[yvar] == val]] for val in uvals]
-
-            plt = ridgeplot(
-                samples=samples,
-                labels=uvals,
-                bandwidth=0.01,
-                colorscale="viridis",
-                colormode="row-index",
-            )
-
-            plt.update_layout(
-                legend=dict(
-                    orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5
-                )
-            )
-
-            return plt
-
-
-ui.include_css(app_dir / "styles.css")
-
-# --------------------------------------------------------
-# Reactive calculations and effects
-# --------------------------------------------------------
-
-
-@reactive.calc
-def tips_data():
-    bill = input.total_bill()
-    idx1 = tips.total_bill.between(bill[0], bill[1])
-    idx2 = tips.time.isin(input.time())
-    return tips[idx1 & idx2]
-
-
-@reactive.effect
-@reactive.event(input.reset)
-def _():
-    ui.update_slider("total_bill", value=bill_rng)
-    ui.update_checkbox_group("time", selected=["Lunch", "Dinner"])
+# ===============================
+# RUN
+# ===============================
+demo.launch()
