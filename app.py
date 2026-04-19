@@ -1,94 +1,136 @@
-# app.py
-# Hugging Face Spaces / Gradio
-# Rbeast Curah Hujan - Python version dari kode R Anda
-
-import io
-import tempfile
+import os
+import time
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import gradio as gr
+
+from supabase import create_client
+from statsmodels.tsa.seasonal import STL
 from Rbeast import beast
 
-# ===============================
-# TEMA MATPLOTLIB
-# ===============================
+# =====================================
+# SUPABASE
+# =====================================
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_KEY")
+supabase = create_client(url, key)
+
+# =====================================
+# TEMA
+# =====================================
 plt.rcParams.update({
     "font.size": 12,
     "axes.labelsize": 13,
-    "axes.titlesize": 14,
-    "xtick.labelsize": 11,
-    "ytick.labelsize": 11,
-    "figure.facecolor": "white",
-    "axes.facecolor": "white"
+    "axes.titlesize": 14
 })
 
-# ===============================
-# FUNGSI PROSES
-# ===============================
-def proses_beast(file):
+# =====================================
+# AMBIL POS
+# =====================================
+def get_pos():
 
-    if file is None:
-        raise gr.Error("Silakan unggah file CSV terlebih dahulu.")
+    q = supabase.table("data_ch")\
+        .select("pos_id")\
+        .execute()
 
-    # =========================
-    # BACA CSV
-    # =========================
-    df = pd.read_csv(
-        file.name,
-        sep=";",
-        encoding="utf-8-sig"
-    )
+    data = pd.DataFrame(q.data)
 
-    df.columns = ["Tanggal", "Data"]
+    return sorted(data["pos_id"].dropna().unique().tolist())
 
-    # =========================
-    # KONVERSI
-    # =========================
-    df["Tanggal"] = pd.to_datetime(
-        df["Tanggal"],
-        format="%d/%m/%y",
-        errors="coerce"
-    )
+# =====================================
+# QUERY DATA
+# =====================================
+def load_data(pos_id):
 
-    df["Data"] = pd.to_numeric(
-        df["Data"],
-        errors="coerce"
-    )
+    q = supabase.table("data_ch")\
+        .select("tanggal,rain")\
+        .eq("pos_id", pos_id)\
+        .order("tanggal")\
+        .execute()
 
-    df = df.dropna(subset=["Tanggal"])
+    df = pd.DataFrame(q.data)
 
-    # =========================
-    # BULANAN
-    # =========================
-    df["year"] = df["Tanggal"].dt.year
-    df["month"] = df["Tanggal"].dt.month
+    df["tanggal"] = pd.to_datetime(df["tanggal"])
+    df["rain"] = pd.to_numeric(df["rain"], errors="coerce").round(0)
 
-    df_monthly = (
-        df.groupby(["year", "month"])["Data"]
-        .sum()
-        .reset_index()
-    )
+    return df
 
-    df_monthly.columns = ["year", "month", "rain"]
+# =====================================
+# AGREGASI
+# =====================================
+def agregasi(df, periode, metode):
 
-    # =========================
-    # DATA TIME SERIES
-    # =========================
-    y = df_monthly["rain"].values.astype(float)
+    df = df.copy()
+    df = df.set_index("tanggal")
 
-    start_year = (
-        df_monthly.loc[0, "year"] +
-        (df_monthly.loc[0, "month"] - 1) / 12
-    )
+    if periode == "Harian":
+        out = df.rename(columns={"rain":"nilai"})
+        return out.reset_index()
 
-    # =========================
-    # BEAST
-    # =========================
+    kode = {
+        "Bulanan":"MS",
+        "Tahunan":"YS"
+    }[periode]
+
+    if metode == "Rerata":
+        out = df.resample(kode).mean()
+
+    elif metode == "Kumulatif":
+        out = df.resample(kode).sum()
+
+    elif metode == "Minimum":
+        out = df.resample(kode).min()
+
+    elif metode == "Maksimum":
+        out = df.resample(kode).max()
+
+    out.columns = ["nilai"]
+
+    return out.reset_index()
+
+# =====================================
+# STL
+# =====================================
+def plot_stl(df):
+
+    ts = df["nilai"].values
+
+    if len(ts) < 24:
+        raise Exception("Data terlalu sedikit untuk STL")
+
+    result = STL(ts, period=12, robust=True).fit()
+
+    fig, ax = plt.subplots(3,1, figsize=(11,8), sharex=True)
+
+    x = df["tanggal"]
+
+    ax[0].plot(x, result.trend, color="green")
+    ax[0].set_ylabel("Tren")
+
+    ax[1].plot(x, result.seasonal, color="red")
+    ax[1].set_ylabel("Musiman")
+
+    ax[2].plot(x, result.resid, color="gray")
+    ax[2].set_ylabel("Residu")
+
+    plt.tight_layout()
+
+    return fig
+
+# =====================================
+# BEAST
+# =====================================
+def plot_beast(df):
+
+    y = df["nilai"].values.astype(float)
+
+    start = df["tanggal"].dt.year.iloc[0]
+
     hasil = beast(
         y,
-        start=start_year,
+        start=start,
         deltat=1/12,
         freq=12,
         season="harmonic"
@@ -98,140 +140,102 @@ def proses_beast(file):
     seasonal = hasil.season.Y
     resid = y - trend - seasonal
 
-    # =========================
-    # INDEX TANGGAL
-    # =========================
-    dates = pd.date_range(
-        start=f"{df_monthly.loc[0,'year']}-{df_monthly.loc[0,'month']:02d}-01",
-        periods=len(y),
-        freq="MS"
-    )
+    fig, ax = plt.subplots(3,1, figsize=(11,8), sharex=True)
 
-    # =========================
-    # PLOT
-    # =========================
-    fig, axes = plt.subplots(
-        3, 1,
-        figsize=(12, 8),
-        sharex=True
-    )
+    x = df["tanggal"]
 
-    locator = mdates.YearLocator(10)
-    formatter = mdates.DateFormatter("%Y")
+    ax[0].plot(x, trend, color="green")
+    ax[0].set_ylabel("Tren")
 
-    # Tren
-    axes[0].plot(
-        dates, trend,
-        color="green",
-        linewidth=2
-    )
-    axes[0].set_ylabel("Tren (mm)")
-    axes[0].grid(alpha=0.25)
+    ax[1].plot(x, seasonal, color="red")
+    ax[1].set_ylabel("Musiman")
 
-    # Musiman
-    axes[1].plot(
-        dates, seasonal,
-        color="red",
-        linewidth=1.5
-    )
-    axes[1].set_ylabel("Musiman (mm)")
-    axes[1].grid(alpha=0.25)
-
-    # Residu
-    axes[2].plot(
-        dates, resid,
-        color="darkgray",
-        linewidth=1.2
-    )
-    axes[2].set_ylabel("Residu (mm)")
-    axes[2].set_xlabel("Tahun")
-    axes[2].grid(alpha=0.25)
-
-    for ax in axes:
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(formatter)
+    ax[2].plot(x, resid, color="gray")
+    ax[2].set_ylabel("Residu")
 
     plt.tight_layout()
 
-    # =========================
-    # RINGKASAN
-    # =========================
-    teks = f"""
-Jumlah data harian : {len(df):,}
-Jumlah data bulanan : {len(df_monthly):,}
-Periode awal : {dates.min().strftime('%Y-%m')}
-Periode akhir : {dates.max().strftime('%Y-%m')}
-Metode : BEAST Harmonic Seasonal
-    """
+    return fig
 
-    return fig, teks
+# =====================================
+# PROSES
+# =====================================
+def proses(pos_id, periode, metode, model):
 
+    t0 = time.time()
 
-# ===============================
-# TEMA HF / GRADIO
-# ===============================
-tema = gr.themes.Soft(
-    primary_hue="blue",
-    secondary_hue="slate",
-    neutral_hue="gray"
-)
+    df = load_data(pos_id)
+    df = agregasi(df, periode, metode)
 
-css = """
-body{
-    background:#f4f6f9;
-}
-.gradio-container{
-    max-width:1100px !important;
-}
-h1{
-    text-align:center;
-}
+    if model == "STL":
+        fig = plot_stl(df)
+    else:
+        fig = plot_beast(df)
+
+    durasi = round(time.time() - t0, 2)
+
+    info = f"""
+Jumlah Data : {len(df)}
+Periode : {periode}
+Metode : {metode}
+Model : {model}
+Waktu Proses : {durasi} detik
 """
 
-# ===============================
+    return fig, info, df.head(20)
+
+# =====================================
 # UI
-# ===============================
-with gr.Blocks(theme=tema, css=css, title="Rbeast Curah Hujan") as demo:
+# =====================================
+tema = gr.themes.Soft()
+
+with gr.Blocks(theme=tema, title="Curah Hujan") as demo:
 
     gr.Markdown("""
-# 🌧️ Dekomposisi Curah Hujan dengan Rbeast
+# 🌧️ Analisis Curah Hujan
 
-Unggah file CSV berformat:
-
-`Tanggal;Data`
-
-Contoh:
-
-`01/01/80;33`
+Sumber data: Supabase  
+Metode: STL dan BEAST
 """)
 
     with gr.Row():
-        file_input = gr.File(
-            label="Unggah CSV",
-            file_types=[".csv"]
+
+        pos = gr.Dropdown(
+            choices=get_pos(),
+            label="Pos ID"
         )
 
-    tombol = gr.Button(
-        "Proses Data",
-        variant="primary"
+        periode = gr.Dropdown(
+            choices=["Harian","Bulanan","Tahunan"],
+            value="Bulanan",
+            label="Periode"
+        )
+
+        metode = gr.Dropdown(
+            choices=["Rerata","Kumulatif","Minimum","Maksimum"],
+            value="Kumulatif",
+            label="Metode"
+        )
+
+        model = gr.Radio(
+            choices=["STL","BEAST"],
+            value="STL",
+            label="Model"
+        )
+
+    btn = gr.Button("Proses", variant="primary")
+
+    plot = gr.Plot()
+
+    info = gr.Textbox(label="Ringkasan")
+
+    tabel = gr.Dataframe()
+
+    btn.click(
+        fn=proses,
+        inputs=[pos, periode, metode, model],
+        outputs=[plot, info, tabel],
+        api_name="proses"
     )
 
-    hasil_plot = gr.Plot(
-        label="Hasil Dekomposisi"
-    )
-
-    hasil_text = gr.Textbox(
-        label="Ringkasan",
-        lines=8
-    )
-
-    tombol.click(
-        fn=proses_beast,
-        inputs=file_input,
-        outputs=[hasil_plot, hasil_text]
-    )
-
-# ===============================
-# RUN
-# ===============================
 demo.launch(server_name="0.0.0.0", server_port=7860)
