@@ -1,7 +1,14 @@
-import os
-import time
-import numpy as np
+# app.py
+# HuggingFace Spaces / Gradio
+# STL + RBEAST berjalan bersamaan
+# Dropdown value = pos_id
+# Label frontend = nama_pos
+
+import warnings
+warnings.filterwarnings("ignore")
+
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import gradio as gr
@@ -10,49 +17,64 @@ from supabase import create_client
 from statsmodels.tsa.seasonal import STL
 from Rbeast import beast
 
-# =====================================
+# =====================================================
 # SUPABASE
-# =====================================
-url = os.getenv("SUPABASE_URL")
-key = os.getenv("SUPABASE_KEY")
-supabase = create_client(url, key)
+# =====================================================
+SUPABASE_URL = "ISI_URL_SUPABASE"
+SUPABASE_KEY = "ISI_ANON_KEY"
 
-# =====================================
-# TEMA
-# =====================================
+supabase = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY
+)
+
+# =====================================================
+# TEMA PLOT
+# =====================================================
 plt.rcParams.update({
-    "font.size": 12,
-    "axes.labelsize": 13,
-    "axes.titlesize": 14
+    "font.size": 11,
+    "axes.labelsize": 12,
+    "axes.titlesize": 13,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10
 })
 
-# =====================================
-# AMBIL POS
-# =====================================
+# =====================================================
+# AMBIL DATA POS
+# tampil: nama_pos
+# value : pos_id
+# =====================================================
 def get_pos():
 
     q = supabase.table("data_ch")\
-        .select("*")\
-        .limit(5)\
+        .select("pos_id,nama_pos")\
         .execute()
-
-    print(q.data)
 
     df = pd.DataFrame(q.data)
 
     if df.empty:
         return []
 
-    print(df.columns)
+    df = df.drop_duplicates(subset=["pos_id"])
+    df = df.sort_values("nama_pos")
 
-    return sorted(df["pos_id"].dropna().unique().tolist())
+    pilihan = []
 
-    print(df.columns.tolist())
+    for _, r in df.iterrows():
+        pilihan.append(
+            (
+                str(r["nama_pos"]),
+                str(r["pos_id"])
+            )
+        )
 
-# =====================================
-# QUERY DATA
-# =====================================
-def load_data(pos_id):
+    return pilihan
+
+# =====================================================
+# AMBIL DATA HUJAN
+# tanggal = yyyy-mm-dd
+# =====================================================
+def get_data(pos_id):
 
     q = supabase.table("data_ch")\
         .select("tanggal,rain")\
@@ -62,85 +84,106 @@ def load_data(pos_id):
 
     df = pd.DataFrame(q.data)
 
+    if df.empty:
+        return df
+
     df["tanggal"] = pd.to_datetime(df["tanggal"])
-    df["rain"] = pd.to_numeric(df["rain"], errors="coerce").round(0)
+    df["rain"] = pd.to_numeric(
+        df["rain"],
+        errors="coerce"
+    ).round(0)
 
     return df
 
-# =====================================
+# =====================================================
 # AGREGASI
-# =====================================
+# =====================================================
 def agregasi(df, periode, metode):
 
-    df = df.copy()
-    df = df.set_index("tanggal")
+    d = df.copy()
+    d = d.set_index("tanggal")
 
     if periode == "Harian":
-        out = df.rename(columns={"rain":"nilai"})
-        return out.reset_index()
+        hasil = d.resample("D")
 
-    kode = {
-        "Bulanan":"MS",
-        "Tahunan":"YS"
-    }[periode]
+    elif periode == "Bulanan":
+        hasil = d.resample("MS")
+
+    else:
+        hasil = d.resample("YS")
 
     if metode == "Rerata":
-        out = df.resample(kode).mean()
-
-    elif metode == "Kumulatif":
-        out = df.resample(kode).sum()
+        out = hasil.mean()
 
     elif metode == "Minimum":
-        out = df.resample(kode).min()
+        out = hasil.min()
 
     elif metode == "Maksimum":
-        out = df.resample(kode).max()
+        out = hasil.max()
 
-    out.columns = ["nilai"]
+    else:
+        out = hasil.sum()
 
-    return out.reset_index()
+    out = out.dropna()
+    out["rain"] = out["rain"].round(0)
 
-# =====================================
+    return out
+
+# =====================================================
 # STL
-# =====================================
+# =====================================================
 def plot_stl(df):
 
-    ts = df["nilai"].values
+    y = df["rain"]
 
-    if len(ts) < 24:
-        raise Exception("Data terlalu sedikit untuk STL")
+    if len(y) < 24:
+        raise ValueError("Data terlalu sedikit.")
 
-    result = STL(ts, period=12, robust=True).fit()
+    stl = STL(
+        y,
+        period=12,
+        robust=True
+    )
 
-    fig, ax = plt.subplots(3,1, figsize=(11,8), sharex=True)
+    r = stl.fit()
 
-    x = df["tanggal"]
+    fig, ax = plt.subplots(
+        3, 1,
+        figsize=(12,8),
+        sharex=True
+    )
 
-    ax[0].plot(x, result.trend, color="green")
+    ax[0].plot(df.index, r.trend, color="green")
     ax[0].set_ylabel("Tren")
 
-    ax[1].plot(x, result.seasonal, color="red")
+    ax[1].plot(df.index, r.seasonal, color="red")
     ax[1].set_ylabel("Musiman")
 
-    ax[2].plot(x, result.resid, color="gray")
+    ax[2].plot(df.index, r.resid, color="gray")
     ax[2].set_ylabel("Residu")
+    ax[2].set_xlabel("Tahun")
+
+    for a in ax:
+        a.grid(alpha=0.25)
 
     plt.tight_layout()
-
     return fig
 
-# =====================================
-# BEAST
-# =====================================
+# =====================================================
+# RBEAST
+# =====================================================
 def plot_beast(df):
 
-    y = df["nilai"].values.astype(float)
+    y = df["rain"].values.astype(float)
 
-    start = df["tanggal"].dt.year.iloc[0]
+    tahun_awal = df.index[0].year
+    bulan_awal = df.index[0].month
+
+    start_year = tahun_awal + (bulan_awal - 1)/12
 
     hasil = beast(
         y,
-        start=start,
+        start=start_year,
         deltat=1/12,
         freq=12,
         season="harmonic"
@@ -150,102 +193,116 @@ def plot_beast(df):
     seasonal = hasil.season.Y
     resid = y - trend - seasonal
 
-    fig, ax = plt.subplots(3,1, figsize=(11,8), sharex=True)
+    fig, ax = plt.subplots(
+        3, 1,
+        figsize=(12,8),
+        sharex=True
+    )
 
-    x = df["tanggal"]
-
-    ax[0].plot(x, trend, color="green")
+    ax[0].plot(df.index, trend, color="green")
     ax[0].set_ylabel("Tren")
 
-    ax[1].plot(x, seasonal, color="red")
+    ax[1].plot(df.index, seasonal, color="red")
     ax[1].set_ylabel("Musiman")
 
-    ax[2].plot(x, resid, color="gray")
+    ax[2].plot(df.index, resid, color="gray")
     ax[2].set_ylabel("Residu")
+    ax[2].set_xlabel("Tahun")
+
+    for a in ax:
+        a.grid(alpha=0.25)
 
     plt.tight_layout()
-
     return fig
 
-# =====================================
-# PROSES
-# =====================================
-def proses(pos_id, periode, metode, model):
+# =====================================================
+# PROSES UTAMA
+# langsung STL + RBEAST
+# =====================================================
+def proses(pos_id, periode, metode):
 
-    t0 = time.time()
+    df = get_data(pos_id)
 
-    df = load_data(pos_id)
-    df = agregasi(df, periode, metode)
+    if df.empty:
+        raise gr.Error("Data kosong.")
 
-    if model == "STL":
-        fig = plot_stl(df)
-    else:
-        fig = plot_beast(df)
+    data = agregasi(df, periode, metode)
 
-    durasi = round(time.time() - t0, 2)
+    fig1 = plot_stl(data)
+    fig2 = plot_beast(data)
 
     info = f"""
-Jumlah Data : {len(df)}
+Jumlah data : {len(data):,}
+Awal data : {data.index.min().date()}
+Akhir data : {data.index.max().date()}
 Periode : {periode}
 Metode : {metode}
-Model : {model}
-Waktu Proses : {durasi} detik
-"""
+    """
 
-    return fig, info, df.head(20)
+    return fig1, fig2, info
 
-# =====================================
+# =====================================================
 # UI
-# =====================================
+# =====================================================
 tema = gr.themes.Soft()
 
-with gr.Blocks(theme=tema, title="Curah Hujan") as demo:
+with gr.Blocks(title="STL & RBEAST Curah Hujan") as demo:
 
     gr.Markdown("""
-# 🌧️ Analisis Curah Hujan
+# 🌧️ Dekomposisi Curah Hujan
 
-Sumber data: Supabase  
-Metode: STL dan BEAST
+Metode berjalan bersamaan:
+
+- STL
+- RBEAST
 """)
 
     with gr.Row():
 
         pos = gr.Dropdown(
             choices=get_pos(),
-            label="Pos ID"
+            label="Pos Hujan",
+            value=None
         )
 
         periode = gr.Dropdown(
-            choices=["Harian","Bulanan","Tahunan"],
+            choices=[
+                "Harian",
+                "Bulanan",
+                "Tahunan"
+            ],
             value="Bulanan",
             label="Periode"
         )
 
         metode = gr.Dropdown(
-            choices=["Rerata","Kumulatif","Minimum","Maksimum"],
+            choices=[
+                "Kumulatif",
+                "Rerata",
+                "Minimum",
+                "Maksimum"
+            ],
             value="Kumulatif",
             label="Metode"
         )
 
-        model = gr.Radio(
-            choices=["STL","BEAST"],
-            value="STL",
-            label="Model"
-        )
+    btn = gr.Button(
+        "Proses",
+        variant="primary"
+    )
 
-    btn = gr.Button("Proses", variant="primary")
+    info = gr.Textbox(
+        label="Ringkasan"
+    )
 
-    plot = gr.Plot()
-
-    info = gr.Textbox(label="Ringkasan")
-
-    tabel = gr.Dataframe()
+    with gr.Row():
+        out1 = gr.Plot(label="STL")
+        out2 = gr.Plot(label="RBEAST")
 
     btn.click(
         fn=proses,
-        inputs=[pos, periode, metode, model],
-        outputs=[plot, info, tabel],
-        api_name="proses"
+        inputs=[pos, periode, metode],
+        outputs=[out1, out2, info]
     )
 
-demo.launch(server_name="0.0.0.0", server_port=7860)
+demo.launch()
