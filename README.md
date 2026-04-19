@@ -1,5 +1,5 @@
 ---
-title: Shiny for Python template
+title: Beast
 emoji: 🌍
 colorFrom: yellow
 colorTo: indigo
