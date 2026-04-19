@@ -3,7 +3,6 @@ shiny
 shinywidgets
 plotly
 ridgeplot
-shiny
 pandas
 numpy
 matplotlib
