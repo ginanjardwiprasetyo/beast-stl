@@ -2,5 +2,11 @@ faicons
 shiny
 shinywidgets
 plotly
-pandas
 ridgeplot
+shiny
+pandas
+numpy
+matplotlib
+seaborn
+statsmodels
+Rbeast
