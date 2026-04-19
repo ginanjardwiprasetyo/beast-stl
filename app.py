@@ -1,7 +1,7 @@
 # ==========================================================
 # app.py
-# HuggingFace Spaces - Gradio
-# STL + RBEAST + Change Point + Loader + Scroll Dropdown
+# FINAL 
+# - parameter STL / BEAST menyesuaikan harian bulanan tahunan
 # ==========================================================
 
 import os
@@ -44,12 +44,14 @@ conn = psycopg2.connect(
 # ==========================================================
 plt.rcParams.update({
     "font.family": "DejaVu Sans",
-    "font.size": 11
+    "font.size": 11,
+    "axes.labelsize": 12,
+    "axes.titlesize": 13
 })
 
 
 # ==========================================================
-# POS HUJAN
+# MASTER POS
 # ==========================================================
 def get_pos():
 
@@ -136,7 +138,7 @@ def agregasi(df, periode, metode):
 
 
 # ==========================================================
-# CEK DATA
+# STATUS DATA
 # ==========================================================
 def cek_data(pos_id, th1, th2):
 
@@ -166,24 +168,62 @@ def cek_data(pos_id, th1, th2):
     else:
         status = "🔴 Warning"
 
-    return f"""
+    teks = f"""
 Pos Hujan       : {nama}
-Tahun           : {int(th1)} - {int(th2)}
+Rentang Tahun   : {int(th1)} - {int(th2)}
 Data Ada        : {ada:,}
 Data Hilang     : {hilang:,}
 Ketersediaan    : {persen} %
 Status          : {status}
 """
 
+    return gr.update(
+        value=teks,
+        visible=True
+    )
+
+
+# ==========================================================
+# PARAMETER BERDASAR PERIODE
+# ==========================================================
+def get_param(periode):
+
+    # period STL
+    # freq BEAST
+    # deltat interval tahun
+
+    if periode == "Harian":
+        return {
+            "period": 365,
+            "freq": 365,
+            "deltat": 1/365
+        }
+
+    elif periode == "Bulanan":
+        return {
+            "period": 12,
+            "freq": 12,
+            "deltat": 1/12
+        }
+
+    else:
+        return {
+            "period": 5,
+            "freq": 1,
+            "deltat": 1
+        }
+
 
 # ==========================================================
 # STL
 # ==========================================================
-def plot_stl(data):
+def plot_stl(data, periode):
+
+    prm = get_param(periode)
 
     y = data["rain"].ffill()
 
-    p = 12 if len(y) >= 24 else max(2, int(len(y)/2))
+    p = min(prm["period"], max(2, len(y)//2))
 
     model = STL(
         y,
@@ -193,7 +233,11 @@ def plot_stl(data):
 
     r = model.fit()
 
-    fig, ax = plt.subplots(3,1, figsize=(12,8), sharex=True)
+    fig, ax = plt.subplots(
+        3,1,
+        figsize=(12,8),
+        sharex=True
+    )
 
     ax[0].plot(data.index, r.trend, color="green")
     ax[0].set_ylabel("Tren")
@@ -214,9 +258,10 @@ def plot_stl(data):
 # ==========================================================
 # RBEAST
 # ==========================================================
-def plot_beast(data):
+def plot_beast(data, periode):
 
     if not BEAST_READY:
+
         fig, ax = plt.subplots(figsize=(10,4))
         ax.text(.5,.5,"RBEAST tidak tersedia",ha="center")
         ax.axis("off")
@@ -224,13 +269,15 @@ def plot_beast(data):
 
     try:
 
-        y = data["rain"].astype(float).values
+        prm = get_param(periode)
+
+        y = data["rain"].values.astype(float)
 
         hasil = beast(
             y,
             start=data.index[0].year,
-            deltat=1/12,
-            freq=12,
+            deltat=prm["deltat"],
+            freq=prm["freq"],
             season="harmonic",
             hasOutlier=True
         )
@@ -239,18 +286,22 @@ def plot_beast(data):
         seasonal = hasil.season.Y
         resid = y - trend - seasonal
 
-        fig, ax = plt.subplots(3,1, figsize=(12,8), sharex=True)
+        fig, ax = plt.subplots(
+            3,1,
+            figsize=(12,8),
+            sharex=True
+        )
 
         # trend
         ax[0].plot(data.index, trend, color="green")
 
-        # confidence band jika ada
+        # confidence band
         try:
             sd = hasil.trend.SD
             ax[0].fill_between(
                 data.index,
-                trend - sd,
-                trend + sd,
+                trend-sd,
+                trend+sd,
                 alpha=.2
             )
         except:
@@ -273,11 +324,9 @@ def plot_beast(data):
 
         ax[0].set_ylabel("Tren")
 
-        # seasonal
         ax[1].plot(data.index, seasonal, color="red")
         ax[1].set_ylabel("Musiman")
 
-        # resid
         ax[2].plot(data.index, resid, color="gray")
         ax[2].set_ylabel("Residu")
 
@@ -296,7 +345,7 @@ def plot_beast(data):
 
 
 # ==========================================================
-# ZIP
+# ZIP PNG
 # ==========================================================
 def simpan_zip(fig1, fig2, nama, th1, th2):
 
@@ -334,23 +383,42 @@ def proses(pos_id, periode, metode, th1, th2):
 
     df = ambil_data(pos_id, th1, th2)
 
+    if df.empty:
+        raise gr.Error("Data kosong.")
+
     data = agregasi(df, periode, metode)
 
-    fig1 = plot_stl(data)
-    fig2 = plot_beast(data)
+    fig1 = plot_stl(data, periode)
+    fig2 = plot_beast(data, periode)
 
     zipf = simpan_zip(fig1, fig2, nama, th1, th2)
 
-    info = cek_data(pos_id, th1, th2)
+    info = f"""
+Pos Hujan     : {nama}
+Periode       : {periode}
+Metode        : {metode}
+Jumlah Data   : {len(data):,}
+"""
 
     return (
-        gr.update(visible=False),
-        gr.update(visible=True),
+        gr.update(visible=False),   # hide status data
+        gr.update(visible=True),    # show hasil
         info,
         fig1,
         fig2,
         zipf
     )
+
+
+# ==========================================================
+# METODE
+# ==========================================================
+def ubah_metode(periode):
+
+    if periode == "Harian":
+        return gr.update(visible=False)
+
+    return gr.update(visible=True)
 
 
 # ==========================================================
@@ -362,38 +430,22 @@ max-width:1900px !important;
 padding:30px 50px !important;
 }
 
-footer{display:none !important;}
-
-textarea{font-size:15px !important;}
-
-button{height:52px !important;}
-
-#loaderbox{
-text-align:center;
-padding:40px;
-background:white;
-border-radius:18px;
+footer{
+display:none !important;
 }
 
-.spin{
-width:55px;
-height:55px;
-border:6px solid #dbeafe;
-border-top:6px solid #2563eb;
-border-radius:50%;
-margin:auto;
-animation:putar 1s linear infinite;
-}
-
-@keyframes putar{
-from{transform:rotate(0)}
-to{transform:rotate(360deg)}
-}
-
-/* dropdown scroll */
+/* dropdown list 5 item */
 .wrap.svelte-1ipelgc{
-max-height:380px !important;
+max-height:190px !important;
 overflow-y:auto !important;
+}
+
+textarea{
+font-size:15px !important;
+}
+
+button{
+height:50px !important;
 }
 """
 
@@ -403,7 +455,7 @@ overflow-y:auto !important;
 # ==========================================================
 with gr.Blocks(css=css, title="Curah Hujan") as demo:
 
-    gr.Markdown("# 🌧️ Dashboard Curah Hujan")
+    gr.Markdown("# 🌧️ Dashboard Dekomposisi Curah Hujan")
 
     with gr.Row():
 
@@ -426,22 +478,29 @@ with gr.Blocks(css=css, title="Curah Hujan") as demo:
         )
 
     with gr.Row():
-        th1 = gr.Number(value=1980)
-        th2 = gr.Number(value=2025)
+
+        th1 = gr.Number(value=1980, label="Tahun Awal")
+        th2 = gr.Number(value=2025, label="Tahun Akhir")
 
     with gr.Row():
+
         btncek = gr.Button("🔍 Cek Data")
-        btn = gr.Button("⚙️ Proses", variant="primary")
+        btn = gr.Button("⚙️ Proses")
 
-    cekbox = gr.Textbox(lines=8, label="Status Data")
-
-    loader = gr.HTML()
+    cekbox = gr.Textbox(
+        label="Status Data",
+        lines=8,
+        visible=False
+    )
 
     hasil = gr.Column(visible=False)
 
     with hasil:
 
-        ring = gr.Textbox(lines=8, label="Ringkasan")
+        ring = gr.Textbox(
+            label="Ringkasan",
+            lines=6
+        )
 
         with gr.Row():
             out1 = gr.Plot(label="STL")
@@ -449,48 +508,38 @@ with gr.Blocks(css=css, title="Curah Hujan") as demo:
 
         unduh = gr.File(label="Unduh PNG")
 
+    # cek data
     btncek.click(
         fn=cek_data,
         inputs=[pos, th1, th2],
         outputs=cekbox
+    ).then(
+        fn=lambda: gr.update(visible=False),
+        outputs=hasil
     )
 
+    # proses
     btn.click(
-        fn=lambda: (
-            gr.update(value="""
-<div id='loaderbox'>
-<div class='spin'></div>
-<div id='timer'>Memproses... 0 detik</div>
-</div>
-"""),
-            gr.update(visible=False),
-            gr.update(value="")
-        ),
-        outputs=[loader, hasil, cekbox],
-        js="""
-() => {
-window.detik=0;
-window.loop=setInterval(()=>{
-window.detik++;
-let t=document.getElementById("timer");
-if(t){t.innerText="Memproses... "+window.detik+" detik";}
-},1000);
-}
-"""
+        fn=lambda: gr.update(visible=False),
+        outputs=cekbox
     ).then(
         fn=proses,
         inputs=[pos, periode, metode, th1, th2],
-        outputs=[loader, hasil, ring, out1, out2, unduh]
-    ).then(
-        fn=lambda:"",
-        outputs=loader,
-        js="""
-() => {clearInterval(window.loop);}
-"""
+        outputs=[cekbox, hasil, ring, out1, out2, unduh]
+    )
+
+    periode.change(
+        fn=ubah_metode,
+        inputs=periode,
+        outputs=metode
     )
 
 
+# ==========================================================
+# RUN
+# ==========================================================
 if __name__ == "__main__":
+
     demo.queue().launch(
         server_name="0.0.0.0",
         server_port=7860
