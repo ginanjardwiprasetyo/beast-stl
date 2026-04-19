@@ -23,6 +23,9 @@ from Rbeast import beast
 # =====================================================
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+if not DATABASE_URL:
+    raise Exception("DATABASE_URL belum diisi di Secrets HuggingFace")
+
 conn = psycopg2.connect(
     DATABASE_URL,
     sslmode="require"
