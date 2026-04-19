@@ -393,10 +393,6 @@ body{
     font-family:Arial,sans-serif !important;
 }
 
-footer{
-    display:none !important;
-}
-
 h1,h2,h3{
     text-align:center;
 }
@@ -548,7 +544,7 @@ Cek data dahulu, lalu olah dengan STL dan RBEAST.
 """
         ),
         outputs=loader,
-        _js="""
+        js="""
 () => {
 let box=document.getElementById("loaderbox");
 if(box){box.style.display="block";}
@@ -573,7 +569,7 @@ if(t){t.innerText="Memproses... "+window.detik+" detik";}
         ]
     ).then(
         fn=lambda: None,
-        _js="""
+        js="""
 () => {
 clearInterval(window.loop);
 let box=document.getElementById("loaderbox");
