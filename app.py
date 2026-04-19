@@ -32,12 +32,22 @@ plt.rcParams.update({
 def get_pos():
 
     q = supabase.table("data_ch")\
-        .select("pos_id")\
+        .select("*")\
+        .limit(5)\
         .execute()
 
-    data = pd.DataFrame(q.data)
+    print(q.data)
 
-    return sorted(data["pos_id"].dropna().unique().tolist())
+    df = pd.DataFrame(q.data)
+
+    if df.empty:
+        return []
+
+    print(df.columns)
+
+    return sorted(df["pos_id"].dropna().unique().tolist())
+
+    print(df.columns.tolist())
 
 # =====================================
 # QUERY DATA
