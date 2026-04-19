@@ -430,10 +430,6 @@ max-width:1900px !important;
 padding:30px 50px !important;
 }
 
-footer{
-display:none !important;
-}
-
 /* dropdown list 5 item */
 .wrap.svelte-1ipelgc{
 max-height:190px !important;
