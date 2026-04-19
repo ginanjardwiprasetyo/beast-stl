@@ -535,7 +535,8 @@ Cek data dahulu, lalu olah dengan STL dan RBEAST.
     )
 
     btn_proses.click(
-        fn=lambda: gr.update(
+    fn=lambda: (
+        gr.update(
             value="""
 <div id='loaderbox'>
 <div class='spin'></div>
@@ -543,8 +544,10 @@ Cek data dahulu, lalu olah dengan STL dan RBEAST.
 </div>
 """
         ),
-        outputs=loader,
-        js="""
+        gr.update(visible=False)
+    ),
+    outputs=[loader, cek_box],
+    js="""
 () => {
 let box=document.getElementById("loaderbox");
 if(box){box.style.display="block";}
@@ -556,7 +559,7 @@ if(t){t.innerText="Memproses... "+window.detik+" detik";}
 },1000);
 }
 """
-    ).then(
+).then(
         fn=proses,
         inputs=[pos, periode, metode, th1, th2],
         outputs=[
