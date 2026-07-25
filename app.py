@@ -255,14 +255,20 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
         ax.text(0.5, 0.5, "RBEAST tidak tersedia", ha="center", va="center")
         ax.set_title(f"BEAST — {nama_pos}", fontsize=15, fontweight="bold")
         ax.axis("off")
-        return fig, []
+        return fig, [], [], []
 
     try:
         prm = get_beast_param(has_seasonality, metode)
         y = df_agg["val"].values.astype(float)
-        start_year = df_agg.index[0].year
-        if not has_seasonality:
-            start_year += (df_agg.index[0].month - 1) / 12
+
+        if metode == "Kumulatif Bulanan":
+            start_year = df_agg.index[0].year + (df_agg.index[0].month - 1) / 12
+        elif metode == "Kumulatif Musiman":
+            month_first = df_agg.index[0].month
+            season_first = ((month_first - 1) // 3) + 1
+            start_year = df_agg.index[0].year + (season_first - 1) / 4
+        else:
+            start_year = df_agg.index[0].year
 
         outlier_flag = has_outlier(y)
         tseg_min_val = 24 if prm["freq"] == 12 else 8 if prm["freq"] == 4 else max(3, len(y) // 4)
@@ -285,28 +291,32 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
 
         trend = hasil.trend.Y
 
+        sd_vals = []
+        try:
+            sd_vals = hasil.trend.SD.tolist()
+        except Exception:
+            pass
+
+        cp_indices = []
+        try:
+            cp_indices = [int(c) for c in hasil.trend.cp if int(c) < len(df_agg)]
+        except Exception:
+            pass
+        cp_dates = [df_agg.index[i].strftime("%Y-%m-%d") for i in cp_indices]
+
         sns.set_style("whitegrid")
         fig, ax = plt.subplots(figsize=(12, 5))
         TREND_COLOR = "#00B300"
 
         ax.plot(df_agg.index, trend, color=TREND_COLOR, linewidth=2.0)
 
-        try:
-            sd = hasil.trend.SD
+        if len(sd_vals):
+            sd = np.array(sd_vals)
             ax.fill_between(df_agg.index, trend - sd, trend + sd,
                             alpha=0.2, color=TREND_COLOR)
-        except Exception:
-            pass
 
-        try:
-            cp = hasil.trend.cp
-            for c in cp:
-                i = int(c)
-                if i < len(df_agg):
-                    ax.axvline(df_agg.index[i],
-                               color="blue", ls="--", alpha=0.7)
-        except Exception:
-            pass
+        for i in cp_indices:
+            ax.axvline(df_agg.index[i], color="blue", ls="--", alpha=0.7)
 
         title_detail = metode + (" (BEAST + Outlier)" if outlier_flag else " (BEAST)")
         ax.set_title(
@@ -328,14 +338,14 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
             ax.spines[side].set_linewidth(1.2)
 
         plt.tight_layout()
-        return fig, trend.tolist()
+        return fig, trend.tolist(), sd_vals, cp_dates
 
     except Exception as e:
         fig, ax = plt.subplots(figsize=(12, 5))
         ax.text(0.5, 0.5, str(e), ha="center", va="center", wrap=True)
         ax.set_title(f"BEAST Error — {nama_pos}", fontsize=15, fontweight="bold")
         ax.axis("off")
-        return fig, []
+        return fig, [], [], []
 
 
 # ==========================================================
@@ -406,7 +416,7 @@ def proses(pos_id, metode, th1, th2, bulan, musim):
     df_agg["val"] = df_agg["val"].ffill().bfill()
 
     fig1, trend_stl = plot_stl(df_agg, has_seasonality, metode, nama)
-    fig2, trend_beast = plot_beast(df_agg, has_seasonality, metode, nama)
+    fig2, trend_beast, _, _ = plot_beast(df_agg, has_seasonality, metode, nama)
     zipf = simpan_zip(fig1, fig2, nama, th1, th2)
 
     trend_label = "Ada tren" if len(trend_stl) > 1 else "-"
@@ -471,9 +481,15 @@ def api_analyze(pos_id, metode, th1, th2, bulan=None, musim=None):
         trend_stl = []
 
     try:
-        _, trend_beast = plot_beast(df_agg, has_seasonality, metode, nama)
+        _, trend_beast, sd_vals, cp_dates = plot_beast(df_agg, has_seasonality, metode, nama)
     except Exception:
-        trend_beast = []
+        trend_beast, sd_vals, cp_dates = [], [], []
+
+    ci_lower = []
+    ci_upper = []
+    if trend_beast and sd_vals and len(trend_beast) == len(sd_vals):
+        ci_lower = [round(t - s, 2) for t, s in zip(trend_beast, sd_vals)]
+        ci_upper = [round(t + s, 2) for t, s in zip(trend_beast, sd_vals)]
 
     result = {
         "pos": nama,
@@ -482,6 +498,9 @@ def api_analyze(pos_id, metode, th1, th2, bulan=None, musim=None):
         "values": [round(v, 2) for v in df_agg["val"].tolist()],
         "trend_stl": [round(v, 2) for v in trend_stl] if len(trend_stl) else [],
         "trend_beast": [round(v, 2) for v in trend_beast] if len(trend_beast) else [],
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "change_points": cp_dates,
         "has_seasonality": has_seasonality,
         "has_outlier": outlier_flag,
         "count": len(df_agg),
