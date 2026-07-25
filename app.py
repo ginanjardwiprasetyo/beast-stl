@@ -411,10 +411,10 @@ def proses(pos_id, metode, th1, th2, bulan, musim):
 
     nama = dict((v, k) for k, v in get_pos())[pos_id]
 
-    if metode in ("Kumulatif Bulanan Khusus",) and not bulan:
-        raise gr.Error("Pilih bulan untuk Kumulatif Bulanan Khusus.")
-    if metode in ("Kumulatif Musiman Khusus",) and not musim:
-        raise gr.Error("Pilih musim untuk Kumulatif Musiman Khusus.")
+    if metode.endswith("Bulanan Khusus") and not bulan:
+        raise gr.Error("Pilih bulan untuk Bulanan Khusus.")
+    if metode.endswith("Musiman Khusus") and not musim:
+        raise gr.Error("Pilih musim untuk Musiman Khusus.")
 
     df = ambil_data(pos_id, th1, th2)
     if df.empty:
@@ -454,8 +454,8 @@ Trend STL     : {trend_label}
 # UI VISIBILITY
 # ==========================================================
 def ubah_metode(metode):
-    show_bulan = metode == "Kumulatif Bulanan Khusus"
-    show_musim = metode == "Kumulatif Musiman Khusus"
+    show_bulan = metode.endswith("Bulanan Khusus")
+    show_musim = metode.endswith("Musiman Khusus")
     return (
         gr.update(visible=show_bulan),
         gr.update(visible=show_musim),
@@ -610,7 +610,22 @@ METODE_LIST = [
     "Kumulatif Musiman",
     "Kumulatif Musiman Khusus",
     "Kumulatif Tahunan",
+    "Rerata Bulanan",
+    "Rerata Bulanan Khusus",
+    "Rerata Musiman",
+    "Rerata Musiman Khusus",
+    "Rerata Tahunan",
+    "Maksimum Bulanan",
+    "Maksimum Bulanan Khusus",
+    "Maksimum Musiman",
+    "Maksimum Musiman Khusus",
+    "Maksimum Tahunan",
     "Maksimum Harian Tahunan",
+    "Minimum Bulanan",
+    "Minimum Bulanan Khusus",
+    "Minimum Musiman",
+    "Minimum Musiman Khusus",
+    "Minimum Tahunan",
 ]
 
 with gr.Blocks(css=css, title="Dekomposisi Curah Hujan") as demo:
