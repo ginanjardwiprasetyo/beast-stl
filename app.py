@@ -302,9 +302,10 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
         try:
             ncp = int(hasil.trend.ncp[0])
             for k in range(ncp):
-                idx = int(hasil.trend.cp[k])
+                cp_time = float(hasil.trend.cp[k])
+                idx = int(round((cp_time - start_year) / prm["deltat"]))
                 pr = float(hasil.trend.cpPr[k])
-                if idx < len(df_agg) and pr >= 0.5:
+                if 0 <= idx < len(df_agg):
                     cp_indices.append(idx)
                     cp_probs.append(round(pr, 4))
         except Exception:
@@ -319,8 +320,8 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
 
         if len(sd_vals):
             sd = np.array(sd_vals)
-            ax.fill_between(df_agg.index, trend - sd, trend + sd,
-                            alpha=0.2, color=TREND_COLOR)
+            ax.fill_between(df_agg.index, trend - 1.96 * sd, trend + 1.96 * sd,
+                            alpha=0.15, color=TREND_COLOR)
 
         for i in cp_indices:
             ax.axvline(df_agg.index[i], color="blue", ls="--", alpha=0.7)
@@ -495,8 +496,8 @@ def api_analyze(pos_id, metode, th1, th2, bulan=None, musim=None):
     ci_lower = []
     ci_upper = []
     if trend_beast and sd_vals and len(trend_beast) == len(sd_vals):
-        ci_lower = [round(t - s, 2) for t, s in zip(trend_beast, sd_vals)]
-        ci_upper = [round(t + s, 2) for t, s in zip(trend_beast, sd_vals)]
+        ci_lower = [round(t - 1.96 * s, 2) for t, s in zip(trend_beast, sd_vals)]
+        ci_upper = [round(t + 1.96 * s, 2) for t, s in zip(trend_beast, sd_vals)]
 
     result = {
         "pos": nama,
