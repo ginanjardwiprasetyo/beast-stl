@@ -5,10 +5,15 @@
 # ==========================================================
 
 import os
+import sys
 import zipfile
 import tempfile
+import logging
 import warnings
 warnings.filterwarnings("ignore")
+
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+log = logging.getLogger("beast")
 
 import numpy as np
 import pandas as pd
@@ -42,7 +47,9 @@ _conn = None
 def get_conn():
     global _conn
     if _conn is None or _conn.closed:
+        log.info("Connecting to DB...")
         _conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+        log.info("DB connected OK")
     return _conn
 
 
@@ -516,8 +523,12 @@ with gr.Blocks(css=css, title="Dekomposisi Curah Hujan") as demo:
     # events
     def load_stations():
         try:
-            return gr.update(choices=get_pos())
-        except Exception:
+            log.info("Loading stations...")
+            stations = get_pos()
+            log.info(f"Loaded {len(stations)} stations")
+            return gr.update(choices=stations)
+        except Exception as e:
+            log.error(f"Failed to load stations: {e}")
             return gr.update(choices=[], value=None)
 
     demo.load(fn=load_stations, outputs=pos)
