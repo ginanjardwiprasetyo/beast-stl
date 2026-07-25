@@ -471,9 +471,10 @@ with gr.Blocks(css=css, title="Dekomposisi Curah Hujan") as demo:
 
     with gr.Row():
         pos = gr.Dropdown(
-            choices=get_pos(),
+            choices=[],
             label="Pos Hujan",
-            scale=3
+            scale=3,
+            interactive=True
         )
         metode = gr.Dropdown(
             METODE_LIST,
@@ -513,6 +514,14 @@ with gr.Blocks(css=css, title="Dekomposisi Curah Hujan") as demo:
         unduh = gr.File(label="Unduh PNG")
 
     # events
+    def load_stations():
+        try:
+            return gr.update(choices=get_pos())
+        except Exception:
+            return gr.update(choices=[], value=None)
+
+    demo.load(fn=load_stations, outputs=pos)
+
     btncek.click(
         fn=cek_data,
         inputs=[pos, th1, th2],
