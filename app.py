@@ -1,7 +1,7 @@
 # ==========================================================
 # app.py
-# FINAL 
-# - parameter STL / BEAST menyesuaikan harian bulanan tahunan
+# Dekomposisi STL & BEAST — port dari thesis
+# Sumber data: PostgreSQL | 6 metode agregasi
 # ==========================================================
 
 import os
@@ -13,7 +13,11 @@ warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
 import psycopg2
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import seaborn as sns
 import gradio as gr
 
 from statsmodels.tsa.seasonal import STL
@@ -24,56 +28,55 @@ from statsmodels.tsa.seasonal import STL
 try:
     from Rbeast import beast
     BEAST_READY = True
-except:
+except Exception:
     BEAST_READY = False
 
 
 # ==========================================================
-# DATABASE
+# DATABASE — lazy connection
 # ==========================================================
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-conn = psycopg2.connect(
-    DATABASE_URL,
-    sslmode="require"
-)
+_conn = None
+
+def get_conn():
+    global _conn
+    if _conn is None or _conn.closed:
+        _conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+    return _conn
 
 
 # ==========================================================
-# STYLE
+# MATPLOTLIB STYLE (thesis)
 # ==========================================================
 plt.rcParams.update({
-    "font.family": "DejaVu Sans",
-    "font.size": 11,
-    "axes.labelsize": 12,
-    "axes.titlesize": 13
+    "font.size": 13,
+    "axes.labelsize": 14,
+    "axes.titlesize": 15,
+    "xtick.labelsize": 13,
+    "ytick.labelsize": 13
 })
+
+NAMA_BULAN = [
+    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+]
+NAMA_MUSIM = ["JFM (Jan-Mar)", "AMJ (Apr-Jun)", "JAS (Jul-Sep)", "OND (Okt-Des)"]
 
 
 # ==========================================================
 # MASTER POS
 # ==========================================================
 def get_pos():
-
-    sql = """
-    SELECT DISTINCT pos_id, nama_pos
-    FROM data_ch
-    ORDER BY nama_pos
-    """
-
-    df = pd.read_sql(sql, conn)
-
-    return [
-        (r["nama_pos"], str(r["pos_id"]))
-        for _, r in df.iterrows()
-    ]
+    sql = "SELECT DISTINCT pos_id, nama_pos FROM data_ch ORDER BY nama_pos"
+    df = pd.read_sql(sql, get_conn())
+    return [(r["nama_pos"], str(r["pos_id"])) for _, r in df.iterrows()]
 
 
 # ==========================================================
-# DATA
+# AMBIL DATA
 # ==========================================================
 def ambil_data(pos_id, th1, th2):
-
     sql = """
     SELECT tanggal, rain
     FROM data_ch
@@ -81,93 +84,286 @@ def ambil_data(pos_id, th1, th2):
     AND EXTRACT(YEAR FROM tanggal) BETWEEN %s AND %s
     ORDER BY tanggal
     """
-
-    df = pd.read_sql(
-        sql,
-        conn,
-        params=[pos_id, int(th1), int(th2)]
-    )
-
-    df["tanggal"] = pd.to_datetime(df["tanggal"])
-    df["rain"] = pd.to_numeric(df["rain"], errors="coerce")
-    df = df.dropna()
-
+    df = pd.read_sql(sql, get_conn(), params=[pos_id, int(th1), int(th2)])
+    df["Tanggal"] = pd.to_datetime(df["tanggal"])
+    df["Data"] = pd.to_numeric(df["rain"], errors="coerce")
+    df = df.dropna(subset=["Data"])
+    df["year"] = df["Tanggal"].dt.year
+    df["month"] = df["Tanggal"].dt.month
+    df["season"] = ((df["month"] - 1) // 3) + 1
     return df
 
 
 # ==========================================================
-# AGREGASI
+# OUTLIER DETECTION (port dari R check_outliers)
 # ==========================================================
-def agregasi(df, periode, metode):
+def has_outlier(data_vector):
+    vec = data_vector[~np.isnan(data_vector)]
+    if len(vec) < 4:
+        return False
+    q1, q3 = np.percentile(vec, [25, 75])
+    iqr = q3 - q1
+    return bool(np.any((vec < q1 - 1.5 * iqr) | (vec > q3 + 1.5 * iqr)))
 
-    d = df.copy().set_index("tanggal")
 
-    if periode == "Harian":
-        out = d.resample("D").sum()
+# ==========================================================
+# AGREGASI (6 metode dari thesis)
+# ==========================================================
+def agregasi(df, metode, bulan=None, musim=None):
 
-    elif periode == "Bulanan":
+    d = df.copy()
 
-        grp = d.resample("MS")
+    if metode == "Maksimum Harian Tahunan":
+        df_agg = d.groupby("year")["Data"].max().reset_index()
+        df_agg["Tanggal"] = pd.to_datetime(df_agg["year"].astype(str) + "-01-01")
+        df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
+        return df_agg, False
 
-        if metode == "Rerata":
-            out = grp.mean()
-        elif metode == "Minimum":
-            out = grp.min()
-        elif metode == "Maksimum":
-            out = grp.max()
-        else:
-            out = grp.sum()
+    elif metode == "Kumulatif Bulanan":
+        df_agg = d.groupby(["year", "month"])["Data"].sum().reset_index()
+        df_agg["Tanggal"] = pd.to_datetime(
+            df_agg["year"].astype(str) + "-" + df_agg["month"].astype(str) + "-01"
+        )
+        df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
+        return df_agg, True
 
+    elif metode == "Kumulatif Bulanan Khusus":
+        m = int(bulan)
+        df_f = d[d["month"] == m]
+        df_agg = df_f.groupby("year")["Data"].sum().reset_index()
+        df_agg["Tanggal"] = pd.to_datetime(
+            df_agg["year"].astype(str) + f"-{m:02d}-01"
+        )
+        df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
+        return df_agg, False
+
+    elif metode == "Kumulatif Musiman":
+        df_agg = d.groupby(["year", "season"])["Data"].sum().reset_index()
+        smap = {1: "01", 2: "04", 3: "07", 4: "10"}
+        df_agg["Tanggal"] = pd.to_datetime(
+            df_agg["year"].astype(str) + "-" + df_agg["season"].map(smap) + "-01"
+        )
+        df_agg = df_agg.sort_values("Tanggal").reset_index(drop=True)
+        df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
+        return df_agg, True
+
+    elif metode == "Kumulatif Musiman Khusus":
+        s = int(musim)
+        df_f = d[d["season"] == s]
+        df_agg = df_f.groupby("year")["Data"].sum().reset_index()
+        smap = {1: "01", 2: "04", 3: "07", 4: "10"}
+        df_agg["Tanggal"] = pd.to_datetime(
+            df_agg["year"].astype(str) + f"-{smap[s]}-01"
+        )
+        df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
+        return df_agg, False
+
+    elif metode == "Kumulatif Tahunan":
+        df_agg = d.groupby("year")["Data"].sum().reset_index()
+        df_agg["Tanggal"] = pd.to_datetime(df_agg["year"].astype(str) + "-01-01")
+        df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
+        return df_agg, False
+
+    raise ValueError(f"Metode tidak dikenal: {metode}")
+
+
+# ==========================================================
+# PARAMETER DEKOMPOSISI (dari thesis)
+# ==========================================================
+def get_stl_param(has_seasonality, metode):
+    if not has_seasonality:
+        return None
+    if metode == "Kumulatif Bulanan":
+        return {"period": 12, "seasonal": 13, "trend": 21}
+    elif metode == "Kumulatif Musiman":
+        return {"period": 4, "seasonal": 7, "trend": 11}
+    return None
+
+
+def get_beast_param(has_seasonality, metode):
+    if metode == "Kumulatif Bulanan":
+        return {"freq": 12, "deltat": 1/12, "season": "harmonic"}
+    elif metode == "Kumulatif Musiman":
+        return {"freq": 4, "deltat": 1/4, "season": "harmonic"}
+    return {"freq": 1, "deltat": 1, "season": "none"}
+
+
+# ==========================================================
+# STL DEKOMPOSISI (thesis style — trend only)
+# ==========================================================
+def plot_stl(df_agg, has_seasonality, metode, nama_pos):
+
+    sns.set_style("whitegrid")
+    fig, ax = plt.subplots(figsize=(12, 5))
+    TREND_COLOR = "#00B300"
+
+    if has_seasonality:
+        prm = get_stl_param(True, metode)
+        y = df_agg["val"].ffill()
+        if len(y) < prm["period"] * 2:
+            y = y.reindex(range(max(len(y), prm["period"] * 2))).ffill()
+        stl = STL(y, period=prm["period"], seasonal=prm["seasonal"],
+                  trend=prm["trend"], robust=True)
+        result = stl.fit()
+        trend = result.trend
+        title_detail = metode
+        ax.plot(df_agg["Tanggal"], trend, color=TREND_COLOR, linewidth=2.0)
     else:
+        window_size = max(3, len(df_agg) // 4)
+        if window_size % 2 == 0:
+            window_size += 1
+        trend = df_agg["val"].rolling(window=window_size, center=True, min_periods=1).mean()
+        title_detail = metode + " (Moving Average)"
+        ax.plot(df_agg["Tanggal"], trend, color=TREND_COLOR, linewidth=2.0)
 
-        grp = d.resample("YS")
+    ax.set_title(
+        f"$\\mathit{{Trend}}$ Data Hujan: {nama_pos}\nMetode: {title_detail}",
+        fontsize=15, fontweight="bold", pad=15
+    )
+    ax.set_ylabel(r"$\mathit{Trend}$ (mm)")
+    ax.set_xlabel("Tahun")
 
-        if metode == "Rerata":
-            out = grp.mean()
-        elif metode == "Minimum":
-            out = grp.min()
-        elif metode == "Maksimum":
-            out = grp.max()
-        else:
-            out = grp.sum()
+    ax.xaxis.set_major_locator(mdates.YearLocator(10))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax.xaxis.grid(False)
+    ax.yaxis.grid(False)
+    ax.tick_params(axis="both", which="both", bottom=True, left=True,
+                   direction="out", length=6, width=1.2, color="#333333")
+    for side in ["bottom", "left", "top", "right"]:
+        ax.spines[side].set_visible(True)
+        ax.spines[side].set_color("#333333")
+        ax.spines[side].set_linewidth(1.2)
 
-    out = out.dropna()
-    out["rain"] = out["rain"].round(0)
-
-    return out
+    plt.tight_layout()
+    return fig, trend.values
 
 
 # ==========================================================
-# STATUS DATA
+# BEAST DEKOMPOSISI (thesis style — trend only)
+# ==========================================================
+def plot_beast(df_agg, has_seasonality, metode, nama_pos):
+
+    if not BEAST_READY:
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.text(0.5, 0.5, "RBEAST tidak tersedia", ha="center", va="center")
+        ax.set_title(f"BEAST — {nama_pos}", fontsize=15, fontweight="bold")
+        ax.axis("off")
+        return fig, []
+
+    try:
+        prm = get_beast_param(has_seasonality, metode)
+        y = df_agg["val"].values.astype(float)
+        start_year = df_agg["Tanggal"].iloc[0].year
+        if not has_seasonality:
+            start_year += (df_agg["Tanggal"].iloc[0].month - 1) / 12
+
+        outlier_flag = has_outlier(y)
+        tseg_min_val = 24 if prm["freq"] == 12 else 8 if prm["freq"] == 4 else max(3, len(y) // 4)
+
+        hasil = beast(
+            y,
+            start=start_year,
+            deltat=prm["deltat"],
+            freq=prm["freq"],
+            season=prm["season"],
+            scp_minmax=[0, 1],
+            sorder_minmax=[1, 3],
+            tcp_minmax=[0, 4],
+            torder_minmax=[0, 1],
+            tseg_min=tseg_min_val,
+            hasOutlier=outlier_flag,
+            mcmc_samples=8000,
+            mcmc_chains=3
+        )
+
+        trend = hasil.trend.Y
+
+        sns.set_style("whitegrid")
+        fig, ax = plt.subplots(figsize=(12, 5))
+        TREND_COLOR = "#00B300"
+
+        ax.plot(df_agg["Tanggal"], trend, color=TREND_COLOR, linewidth=2.0)
+
+        try:
+            sd = hasil.trend.SD
+            ax.fill_between(df_agg["Tanggal"], trend - sd, trend + sd,
+                            alpha=0.2, color=TREND_COLOR)
+        except Exception:
+            pass
+
+        try:
+            cp = hasil.trend.cp
+            for c in cp:
+                i = int(c)
+                if i < len(df_agg):
+                    ax.axvline(df_agg["Tanggal"].iloc[i],
+                               color="blue", ls="--", alpha=0.7)
+        except Exception:
+            pass
+
+        title_detail = metode + (" (BEAST + Outlier)" if outlier_flag else " (BEAST)")
+        ax.set_title(
+            f"$\\mathit{{Trend}}$ Data Hujan: {nama_pos}\nMetode: {title_detail}",
+            fontsize=15, fontweight="bold", pad=15
+        )
+        ax.set_ylabel(r"$\mathit{Trend}$ (mm)")
+        ax.set_xlabel("Tahun")
+
+        ax.xaxis.set_major_locator(mdates.YearLocator(10))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+        ax.xaxis.grid(False)
+        ax.yaxis.grid(False)
+        ax.tick_params(axis="both", which="both", bottom=True, left=True,
+                       direction="out", length=6, width=1.2, color="#333333")
+        for side in ["bottom", "left", "top", "right"]:
+            ax.spines[side].set_visible(True)
+            ax.spines[side].set_color("#333333")
+            ax.spines[side].set_linewidth(1.2)
+
+        plt.tight_layout()
+        return fig, trend.tolist()
+
+    except Exception as e:
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.text(0.5, 0.5, str(e), ha="center", va="center", wrap=True)
+        ax.set_title(f"BEAST Error — {nama_pos}", fontsize=15, fontweight="bold")
+        ax.axis("off")
+        return fig, []
+
+
+# ==========================================================
+# ZIP PNG
+# ==========================================================
+def simpan_zip(fig1, fig2, nama, th1, th2):
+    zf = tempfile.NamedTemporaryFile(delete=False, suffix=".zip").name
+    p1 = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+    p2 = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+    fig1.savefig(p1, dpi=220, bbox_inches="tight")
+    fig2.savefig(p2, dpi=220, bbox_inches="tight")
+    with zipfile.ZipFile(zf, "w") as z:
+        z.write(p1, f"STL_{nama}_{th1}_{th2}.png")
+        z.write(p2, f"BEAST_{nama}_{th1}_{th2}.png")
+    return zf
+
+
+# ==========================================================
+# CEK DATA
 # ==========================================================
 def cek_data(pos_id, th1, th2):
-
     if not pos_id:
         raise gr.Error("Pilih pos hujan dahulu.")
-
     nama = dict((v, k) for k, v in get_pos())[pos_id]
-
     df = ambil_data(pos_id, th1, th2)
-
-    total = len(
-        pd.date_range(
-            f"{int(th1)}-01-01",
-            f"{int(th2)}-12-31",
-            freq="D"
-        )
-    )
-
+    total = len(pd.date_range(f"{int(th1)}-01-01", f"{int(th2)}-12-31", freq="D"))
     ada = len(df)
     hilang = total - ada
     persen = round(ada / total * 100, 2)
-
     if persen >= 90:
         status = "🟢 Sangat Baik"
     elif persen >= 75:
         status = "🟡 Cukup"
     else:
         status = "🔴 Warning"
-
     teks = f"""
 Pos Hujan       : {nama}
 Rentang Tahun   : {int(th1)} - {int(th2)}
@@ -176,233 +372,51 @@ Data Hilang     : {hilang:,}
 Ketersediaan    : {persen} %
 Status          : {status}
 """
-
-    return gr.update(
-        value=teks,
-        visible=True
-    )
-
-
-# ==========================================================
-# PARAMETER BERDASAR PERIODE
-# ==========================================================
-def get_param(periode):
-
-    # period STL
-    # freq BEAST
-    # deltat interval tahun
-
-    if periode == "Harian":
-        return {
-            "period": 365,
-            "freq": 365,
-            "deltat": 1/365
-        }
-
-    elif periode == "Bulanan":
-        return {
-            "period": 12,
-            "freq": 12,
-            "deltat": 1/12
-        }
-
-    else:
-        return {
-            "period": 5,
-            "freq": 1,
-            "deltat": 1
-        }
-
-
-# ==========================================================
-# STL
-# ==========================================================
-def plot_stl(data, periode):
-
-    prm = get_param(periode)
-
-    y = data["rain"].ffill()
-
-    p = min(prm["period"], max(2, len(y)//2))
-
-    model = STL(
-        y,
-        period=p,
-        robust=True
-    )
-
-    r = model.fit()
-
-    fig, ax = plt.subplots(
-        3,1,
-        figsize=(12,8),
-        sharex=True
-    )
-
-    ax[0].plot(data.index, r.trend, color="green")
-    ax[0].set_ylabel("Tren")
-
-    ax[1].plot(data.index, r.seasonal, color="red")
-    ax[1].set_ylabel("Musiman")
-
-    ax[2].plot(data.index, r.resid, color="gray")
-    ax[2].set_ylabel("Residu")
-
-    for a in ax:
-        a.grid(alpha=.25)
-
-    plt.tight_layout()
-    return fig
-
-
-# ==========================================================
-# RBEAST
-# ==========================================================
-def plot_beast(data, periode):
-
-    if not BEAST_READY:
-
-        fig, ax = plt.subplots(figsize=(10,4))
-        ax.text(.5,.5,"RBEAST tidak tersedia",ha="center")
-        ax.axis("off")
-        return fig
-
-    try:
-
-        prm = get_param(periode)
-
-        y = data["rain"].values.astype(float)
-
-        hasil = beast(
-            y,
-            start=data.index[0].year,
-            deltat=prm["deltat"],
-            freq=prm["freq"],
-            season="harmonic",
-            hasOutlier=True
-        )
-
-        trend = hasil.trend.Y
-        seasonal = hasil.season.Y
-        resid = y - trend - seasonal
-
-        fig, ax = plt.subplots(
-            3,1,
-            figsize=(12,8),
-            sharex=True
-        )
-
-        # trend
-        ax[0].plot(data.index, trend, color="green")
-
-        # confidence band
-        try:
-            sd = hasil.trend.SD
-            ax[0].fill_between(
-                data.index,
-                trend-sd,
-                trend+sd,
-                alpha=.2
-            )
-        except:
-            pass
-
-        # change point
-        try:
-            cp = hasil.trend.cp
-            for c in cp:
-                i = int(c)
-                if i < len(data):
-                    ax[0].axvline(
-                        data.index[i],
-                        color="blue",
-                        ls="--",
-                        alpha=.7
-                    )
-        except:
-            pass
-
-        ax[0].set_ylabel("Tren")
-
-        ax[1].plot(data.index, seasonal, color="red")
-        ax[1].set_ylabel("Musiman")
-
-        ax[2].plot(data.index, resid, color="gray")
-        ax[2].set_ylabel("Residu")
-
-        for a in ax:
-            a.grid(alpha=.25)
-
-        plt.tight_layout()
-        return fig
-
-    except Exception as e:
-
-        fig, ax = plt.subplots(figsize=(10,4))
-        ax.text(.5,.5,str(e),ha="center")
-        ax.axis("off")
-        return fig
-
-
-# ==========================================================
-# ZIP PNG
-# ==========================================================
-def simpan_zip(fig1, fig2, nama, th1, th2):
-
-    zf = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".zip"
-    ).name
-
-    p1 = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".png"
-    ).name
-
-    p2 = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".png"
-    ).name
-
-    fig1.savefig(p1, dpi=220, bbox_inches="tight")
-    fig2.savefig(p2, dpi=220, bbox_inches="tight")
-
-    with zipfile.ZipFile(zf,"w") as z:
-        z.write(p1, f"STL_{nama}_{th1}_{th2}.png")
-        z.write(p2, f"BEAST_{nama}_{th1}_{th2}.png")
-
-    return zf
+    return gr.update(value=teks, visible=True)
 
 
 # ==========================================================
 # PROSES
 # ==========================================================
-def proses(pos_id, periode, metode, th1, th2):
+def proses(pos_id, metode, th1, th2, bulan, musim):
 
-    nama = dict((v,k) for k,v in get_pos())[pos_id]
+    if not pos_id:
+        raise gr.Error("Pilih pos hujan dahulu.")
+
+    nama = dict((v, k) for k, v in get_pos())[pos_id]
+
+    if metode in ("Kumulatif Bulanan Khusus",) and not bulan:
+        raise gr.Error("Pilih bulan untuk Kumulatif Bulanan Khusus.")
+    if metode in ("Kumulatif Musiman Khusus",) and not musim:
+        raise gr.Error("Pilih musim untuk Kumulatif Musiman Khusus.")
 
     df = ambil_data(pos_id, th1, th2)
-
     if df.empty:
         raise gr.Error("Data kosong.")
 
-    data = agregasi(df, periode, metode)
+    df_agg, has_seasonality = agregasi(df, metode, bulan, musim)
+    df_agg = df_agg.set_index("Tanggal").sort_index()
+    df_agg["val"] = df_agg["val"].ffill().bfill()
 
-    fig1 = plot_stl(data, periode)
-    fig2 = plot_beast(data, periode)
-
+    fig1, trend_stl = plot_stl(df_agg, has_seasonality, metode, nama)
+    fig2, trend_beast = plot_beast(df_agg, has_seasonality, metode, nama)
     zipf = simpan_zip(fig1, fig2, nama, th1, th2)
+
+    trend_label = "Ada tren" if len(trend_stl) > 1 else "-"
+    outlier_flag = has_outlier(df_agg["val"].values)
 
     info = f"""
 Pos Hujan     : {nama}
-Periode       : {periode}
 Metode        : {metode}
-Jumlah Data   : {len(data):,}
+Jumlah Data   : {len(df_agg):,}
+Outlier       : {"Ya" if outlier_flag else "Tidak"}
+Seasonal      : {"Ya" if has_seasonality else "Tidak (Moving Average)"}
+Trend STL     : {trend_label}
 """
 
     return (
-        gr.update(visible=False),   # hide status data
-        gr.update(visible=True),    # show hasil
+        gr.update(visible=False),
+        gr.update(visible=True),
         info,
         fig1,
         fig2,
@@ -411,14 +425,15 @@ Jumlah Data   : {len(data):,}
 
 
 # ==========================================================
-# METODE
+# UI VISIBILITY
 # ==========================================================
-def ubah_metode(periode):
-
-    if periode == "Harian":
-        return gr.update(visible=False)
-
-    return gr.update(visible=True)
+def ubah_metode(metode):
+    show_bulan = metode == "Kumulatif Bulanan Khusus"
+    show_musim = metode == "Kumulatif Musiman Khusus"
+    return (
+        gr.update(visible=show_bulan),
+        gr.update(visible=show_musim),
+    )
 
 
 # ==========================================================
@@ -429,17 +444,9 @@ css = """
 max-width:1900px !important;
 padding:30px 50px !important;
 }
-
-/* dropdown list 5 item */
-.wrap.svelte-1ipelgc{
-max-height:190px !important;
-overflow-y:auto !important;
-}
-
 textarea{
 font-size:15px !important;
 }
-
 button{
 height:50px !important;
 }
@@ -449,62 +456,63 @@ height:50px !important;
 # ==========================================================
 # UI
 # ==========================================================
-with gr.Blocks(css=css, title="Curah Hujan") as demo:
+METODE_LIST = [
+    "Kumulatif Bulanan",
+    "Kumulatif Bulanan Khusus",
+    "Kumulatif Musiman",
+    "Kumulatif Musiman Khusus",
+    "Kumulatif Tahunan",
+    "Maksimum Harian Tahunan",
+]
+
+with gr.Blocks(css=css, title="Dekomposisi Curah Hujan") as demo:
 
     gr.Markdown("# 🌧️ Dashboard Dekomposisi Curah Hujan")
 
     with gr.Row():
-
         pos = gr.Dropdown(
             choices=get_pos(),
             label="Pos Hujan",
             scale=3
         )
-
-        periode = gr.Dropdown(
-            ["Harian","Bulanan","Tahunan"],
-            value="Bulanan",
+        metode = gr.Dropdown(
+            METODE_LIST,
+            value="Kumulatif Bulanan",
+            label="Metode Agregasi",
+            scale=2
+        )
+        bulan = gr.Dropdown(
+            [(b, str(i+1)) for i, b in enumerate(NAMA_BULAN)],
+            label="Pilih Bulan",
+            visible=False,
             scale=1
         )
-
-        metode = gr.Dropdown(
-            ["Kumulatif","Rerata","Minimum","Maksimum"],
-            value="Kumulatif",
+        musim = gr.Dropdown(
+            [(m, str(i+1)) for i, m in enumerate(NAMA_MUSIM)],
+            label="Pilih Musim",
+            visible=False,
             scale=1
         )
 
     with gr.Row():
-
         th1 = gr.Number(value=1980, label="Tahun Awal")
         th2 = gr.Number(value=2025, label="Tahun Akhir")
 
     with gr.Row():
-
         btncek = gr.Button("🔍 Cek Data")
         btn = gr.Button("⚙️ Proses")
 
-    cekbox = gr.Textbox(
-        label="Status Data",
-        lines=8,
-        visible=False
-    )
+    cekbox = gr.Textbox(label="Status Data", lines=8, visible=False)
 
     hasil = gr.Column(visible=False)
-
     with hasil:
-
-        ring = gr.Textbox(
-            label="Ringkasan",
-            lines=6
-        )
-
+        ring = gr.Textbox(label="Ringkasan", lines=7)
         with gr.Row():
-            out1 = gr.Plot(label="STL")
-            out2 = gr.Plot(label="RBEAST")
-
+            out1 = gr.Plot(label="STL — Trend")
+            out2 = gr.Plot(label="BEAST — Trend")
         unduh = gr.File(label="Unduh PNG")
 
-    # cek data
+    # events
     btncek.click(
         fn=cek_data,
         inputs=[pos, th1, th2],
@@ -514,20 +522,19 @@ with gr.Blocks(css=css, title="Curah Hujan") as demo:
         outputs=hasil
     )
 
-    # proses
     btn.click(
         fn=lambda: gr.update(visible=False),
         outputs=cekbox
     ).then(
         fn=proses,
-        inputs=[pos, periode, metode, th1, th2],
+        inputs=[pos, metode, th1, th2, bulan, musim],
         outputs=[cekbox, hasil, ring, out1, out2, unduh]
     )
 
-    periode.change(
+    metode.change(
         fn=ubah_metode,
-        inputs=periode,
-        outputs=metode
+        inputs=metode,
+        outputs=[bulan, musim]
     )
 
 
@@ -535,7 +542,6 @@ with gr.Blocks(css=css, title="Curah Hujan") as demo:
 # RUN
 # ==========================================================
 if __name__ == "__main__":
-
     demo.queue().launch(
         server_name="0.0.0.0",
         server_port=7860
