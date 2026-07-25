@@ -214,14 +214,14 @@ def plot_stl(df_agg, has_seasonality, metode, nama_pos):
         result = stl.fit()
         trend = result.trend
         title_detail = metode
-        ax.plot(df_agg["Tanggal"], trend, color=TREND_COLOR, linewidth=2.0)
+        ax.plot(df_agg.index, trend, color=TREND_COLOR, linewidth=2.0)
     else:
         window_size = max(3, len(df_agg) // 4)
         if window_size % 2 == 0:
             window_size += 1
         trend = df_agg["val"].rolling(window=window_size, center=True, min_periods=1).mean()
         title_detail = metode + " (Moving Average)"
-        ax.plot(df_agg["Tanggal"], trend, color=TREND_COLOR, linewidth=2.0)
+        ax.plot(df_agg.index, trend, color=TREND_COLOR, linewidth=2.0)
 
     ax.set_title(
         f"$\\mathit{{Trend}}$ Data Hujan: {nama_pos}\nMetode: {title_detail}",
@@ -260,9 +260,9 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
     try:
         prm = get_beast_param(has_seasonality, metode)
         y = df_agg["val"].values.astype(float)
-        start_year = df_agg["Tanggal"].iloc[0].year
+        start_year = df_agg.index[0].year
         if not has_seasonality:
-            start_year += (df_agg["Tanggal"].iloc[0].month - 1) / 12
+            start_year += (df_agg.index[0].month - 1) / 12
 
         outlier_flag = has_outlier(y)
         tseg_min_val = 24 if prm["freq"] == 12 else 8 if prm["freq"] == 4 else max(3, len(y) // 4)
@@ -289,11 +289,11 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
         fig, ax = plt.subplots(figsize=(12, 5))
         TREND_COLOR = "#00B300"
 
-        ax.plot(df_agg["Tanggal"], trend, color=TREND_COLOR, linewidth=2.0)
+        ax.plot(df_agg.index, trend, color=TREND_COLOR, linewidth=2.0)
 
         try:
             sd = hasil.trend.SD
-            ax.fill_between(df_agg["Tanggal"], trend - sd, trend + sd,
+            ax.fill_between(df_agg.index, trend - sd, trend + sd,
                             alpha=0.2, color=TREND_COLOR)
         except Exception:
             pass
@@ -303,7 +303,7 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
             for c in cp:
                 i = int(c)
                 if i < len(df_agg):
-                    ax.axvline(df_agg["Tanggal"].iloc[i],
+                    ax.axvline(df_agg.index[i],
                                color="blue", ls="--", alpha=0.7)
         except Exception:
             pass
