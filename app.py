@@ -509,6 +509,10 @@ with gr.Blocks(css=css, title="Dekomposisi Curah Hujan") as demo:
     with gr.Row():
         btncek = gr.Button("🔍 Cek Data")
         btn = gr.Button("⚙️ Proses")
+        status_loading = gr.Textbox(
+            value="", visible=False, interactive=False,
+            elem_id="loading_status"
+        )
 
     cekbox = gr.Textbox(label="Status Data", lines=8, visible=False)
 
@@ -543,12 +547,15 @@ with gr.Blocks(css=css, title="Dekomposisi Curah Hujan") as demo:
     )
 
     btn.click(
-        fn=lambda: gr.update(visible=False),
-        outputs=cekbox
+        fn=lambda: (gr.update(visible=False), gr.update(visible=True, value="⏳ Memproses STL & BEAST... Mohon tunggu.")),
+        outputs=[cekbox, status_loading]
     ).then(
         fn=proses,
         inputs=[pos, metode, th1, th2, bulan, musim],
         outputs=[cekbox, hasil, ring, out1, out2, unduh]
+    ).then(
+        fn=lambda: gr.update(visible=False),
+        outputs=status_loading
     )
 
     metode.change(
