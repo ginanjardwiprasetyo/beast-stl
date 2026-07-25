@@ -255,7 +255,7 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
         ax.text(0.5, 0.5, "RBEAST tidak tersedia", ha="center", va="center")
         ax.set_title(f"BEAST — {nama_pos}", fontsize=15, fontweight="bold")
         ax.axis("off")
-        return fig, [], [], []
+        return fig, [], [], [], []
 
     try:
         prm = get_beast_param(has_seasonality, metode)
@@ -298,8 +298,15 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
             pass
 
         cp_indices = []
+        cp_probs = []
         try:
-            cp_indices = [int(c) for c in hasil.trend.cp if int(c) < len(df_agg)]
+            ncp = int(hasil.trend.ncp[0])
+            for k in range(ncp):
+                idx = int(hasil.trend.cp[k])
+                pr = float(hasil.trend.cpPr[k])
+                if idx < len(df_agg) and pr >= 0.5:
+                    cp_indices.append(idx)
+                    cp_probs.append(round(pr, 4))
         except Exception:
             pass
         cp_dates = [df_agg.index[i].strftime("%Y-%m-%d") for i in cp_indices]
@@ -338,14 +345,14 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
             ax.spines[side].set_linewidth(1.2)
 
         plt.tight_layout()
-        return fig, trend.tolist(), sd_vals, cp_dates
+        return fig, trend.tolist(), sd_vals, cp_dates, cp_probs
 
     except Exception as e:
         fig, ax = plt.subplots(figsize=(12, 5))
         ax.text(0.5, 0.5, str(e), ha="center", va="center", wrap=True)
         ax.set_title(f"BEAST Error — {nama_pos}", fontsize=15, fontweight="bold")
         ax.axis("off")
-        return fig, [], [], []
+        return fig, [], [], [], []
 
 
 # ==========================================================
@@ -416,7 +423,7 @@ def proses(pos_id, metode, th1, th2, bulan, musim):
     df_agg["val"] = df_agg["val"].ffill().bfill()
 
     fig1, trend_stl = plot_stl(df_agg, has_seasonality, metode, nama)
-    fig2, trend_beast, _, _ = plot_beast(df_agg, has_seasonality, metode, nama)
+    fig2, trend_beast, _, _, _ = plot_beast(df_agg, has_seasonality, metode, nama)
     zipf = simpan_zip(fig1, fig2, nama, th1, th2)
 
     trend_label = "Ada tren" if len(trend_stl) > 1 else "-"
@@ -481,9 +488,9 @@ def api_analyze(pos_id, metode, th1, th2, bulan=None, musim=None):
         trend_stl = []
 
     try:
-        _, trend_beast, sd_vals, cp_dates = plot_beast(df_agg, has_seasonality, metode, nama)
+        _, trend_beast, sd_vals, cp_dates, cp_probs = plot_beast(df_agg, has_seasonality, metode, nama)
     except Exception:
-        trend_beast, sd_vals, cp_dates = [], [], []
+        trend_beast, sd_vals, cp_dates, cp_probs = [], [], [], []
 
     ci_lower = []
     ci_upper = []
@@ -501,6 +508,7 @@ def api_analyze(pos_id, metode, th1, th2, bulan=None, musim=None):
         "ci_lower": ci_lower,
         "ci_upper": ci_upper,
         "change_points": cp_dates,
+        "change_point_probs": cp_probs,
         "has_seasonality": has_seasonality,
         "has_outlier": outlier_flag,
         "count": len(df_agg),
