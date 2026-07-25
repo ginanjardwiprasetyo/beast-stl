@@ -180,17 +180,17 @@ def agregasi(df, metode, bulan=None, musim=None):
 def get_stl_param(has_seasonality, metode):
     if not has_seasonality:
         return None
-    if metode == "Kumulatif Bulanan":
+    if "Bulanan" in metode and "Khusus" not in metode:
         return {"period": 12, "seasonal": 13, "trend": 21}
-    elif metode == "Kumulatif Musiman":
+    elif "Musiman" in metode and "Khusus" not in metode:
         return {"period": 4, "seasonal": 7, "trend": 11}
     return None
 
 
 def get_beast_param(has_seasonality, metode):
-    if metode == "Kumulatif Bulanan":
+    if "Bulanan" in metode and "Khusus" not in metode:
         return {"freq": 12, "deltat": 1/12, "season": "harmonic"}
-    elif metode == "Kumulatif Musiman":
+    elif "Musiman" in metode and "Khusus" not in metode:
         return {"freq": 4, "deltat": 1/4, "season": "harmonic"}
     return {"freq": 1, "deltat": 1, "season": "none"}
 
@@ -261,9 +261,9 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
         prm = get_beast_param(has_seasonality, metode)
         y = df_agg["val"].values.astype(float)
 
-        if metode == "Kumulatif Bulanan":
+        if "Bulanan" in metode and "Khusus" not in metode:
             start_year = df_agg.index[0].year + (df_agg.index[0].month - 1) / 12
-        elif metode == "Kumulatif Musiman":
+        elif "Musiman" in metode and "Khusus" not in metode:
             month_first = df_agg.index[0].month
             season_first = ((month_first - 1) // 3) + 1
             start_year = df_agg.index[0].year + (season_first - 1) / 4
@@ -541,21 +541,21 @@ def api_analyze_data(raw_data, metode, bulan=None, musim=None):
     df_agg = df_agg.set_index("Tanggal").sort_index()
     df_agg["val"] = df_agg["val"].ffill().bfill()
 
-    parts = metode.split(" ")
-    has_seasonality = False
+    parts = metode.split()
+    seasonality = False
     if len(parts) >= 2:
         period = parts[1]
-        has_seasonality = period in ("Bulanan", "Musiman") and "Khusus" not in metode
+        seasonality = period in ("Bulanan", "Musiman") and "Khusus" not in metode
     nama = "Data Unggahan"
     outlier_flag = has_outlier(df_agg["val"].values)
 
     try:
-        _, trend_stl = plot_stl(df_agg, has_seasonality, metode, nama)
+        _, trend_stl = plot_stl(df_agg, seasonality, metode, nama)
     except Exception:
         trend_stl = []
 
     try:
-        _, trend_beast, sd_vals, cp_dates, cp_probs = plot_beast(df_agg, has_seasonality, metode, nama)
+        _, trend_beast, sd_vals, cp_dates, cp_probs = plot_beast(df_agg, seasonality, metode, nama)
     except Exception:
         trend_beast, sd_vals, cp_dates, cp_probs = [], [], [], []
 
@@ -576,7 +576,7 @@ def api_analyze_data(raw_data, metode, bulan=None, musim=None):
         "ci_upper": ci_upper,
         "change_points": cp_dates,
         "change_point_probs": cp_probs,
-        "has_seasonality": has_seasonality,
+        "has_seasonality": seasonality,
         "has_outlier": outlier_flag,
         "count": len(df_agg),
     }
