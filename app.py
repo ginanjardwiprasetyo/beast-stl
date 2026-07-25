@@ -444,6 +444,53 @@ def ubah_metode(metode):
 
 
 # ==========================================================
+# API ENDPOINT — JSON untuk project01
+# ==========================================================
+def api_analyze(pos_id, metode, th1, th2, bulan=None, musim=None):
+    import json as _json
+
+    if not pos_id:
+        return _json.dumps({"error": "Pilih pos hujan."})
+
+    nama_map = {v: k for k, v in get_pos()}
+    nama = nama_map.get(pos_id, pos_id)
+
+    df = ambil_data(pos_id, th1, th2)
+    if df.empty:
+        return _json.dumps({"error": "Data kosong."})
+
+    df_agg, has_seasonality = agregasi(df, metode, bulan, musim)
+    df_agg = df_agg.set_index("Tanggal").sort_index()
+    df_agg["val"] = df_agg["val"].ffill().bfill()
+
+    outlier_flag = has_outlier(df_agg["val"].values)
+
+    try:
+        _, trend_stl = plot_stl(df_agg, has_seasonality, metode, nama)
+    except Exception:
+        trend_stl = []
+
+    try:
+        _, trend_beast = plot_beast(df_agg, has_seasonality, metode, nama)
+    except Exception:
+        trend_beast = []
+
+    result = {
+        "pos": nama,
+        "metode": metode,
+        "dates": [d.strftime("%Y-%m-%d") for d in df_agg.index],
+        "values": [round(v, 2) for v in df_agg["val"].tolist()],
+        "trend_stl": [round(v, 2) for v in trend_stl] if len(trend_stl) else [],
+        "trend_beast": [round(v, 2) for v in trend_beast] if len(trend_beast) else [],
+        "has_seasonality": has_seasonality,
+        "has_outlier": outlier_flag,
+        "count": len(df_agg),
+    }
+
+    return _json.dumps(result)
+
+
+# ==========================================================
 # CSS
 # ==========================================================
 css = """
@@ -562,6 +609,22 @@ with gr.Blocks(css=css, title="Dekomposisi Curah Hujan") as demo:
         fn=ubah_metode,
         inputs=metode,
         outputs=[bulan, musim]
+    )
+
+    # API endpoint — hidden, callable via /api/api_analyze
+    api_pos = gr.Textbox(visible=False)
+    api_met = gr.Textbox(visible=False)
+    api_th1 = gr.Number(visible=False)
+    api_th2 = gr.Number(visible=False)
+    api_bulan = gr.Textbox(visible=False)
+    api_musim = gr.Textbox(visible=False)
+    api_out = gr.Textbox(visible=False)
+
+    api_btn = gr.Button(visible=False)
+    api_btn.click(
+        fn=api_analyze,
+        inputs=[api_pos, api_met, api_th1, api_th2, api_bulan, api_musim],
+        outputs=api_out
     )
 
 
