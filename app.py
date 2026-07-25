@@ -284,7 +284,7 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
             tcp_minmax=[0, 4],
             torder_minmax=[0, 1],
             tseg_min=tseg_min_val,
-            hasOutlier=False,
+            hasOutlier=outlier_flag,
             mcmc_samples=8000,
             mcmc_chains=3
         )
@@ -518,6 +518,67 @@ def api_analyze(pos_id, metode, th1, th2, bulan=None, musim=None):
     return _json.dumps(result)
 
 
+def api_analyze_data(raw_data, metode, bulan=None, musim=None):
+    """Analyze uploaded data directly (bypasses DB fetch)."""
+    import json as _json
+
+    if not raw_data:
+        return _json.dumps({"error": "Data kosong."})
+
+    try:
+        rows = _json.loads(raw_data)
+    except Exception:
+        return _json.dumps({"error": "Format data tidak valid."})
+
+    if not rows:
+        return _json.dumps({"error": "Data kosong."})
+
+    df_agg = pd.DataFrame(rows)
+    df_agg["Tanggal"] = pd.to_datetime(df_agg["date"])
+    df_agg["val"] = pd.to_numeric(df_agg["value"], errors="coerce")
+    df_agg = df_agg.dropna(subset=["val"])
+    df_agg = df_agg.set_index("Tanggal").sort_index()
+    df_agg["val"] = df_agg["val"].ffill().bfill()
+
+    has_seasonality = metode in ("Kumulatif Bulanan", "Kumulatif Musiman")
+    nama = "Data Unggahan"
+    outlier_flag = has_outlier(df_agg["val"].values)
+
+    try:
+        _, trend_stl = plot_stl(df_agg, has_seasonality, metode, nama)
+    except Exception:
+        trend_stl = []
+
+    try:
+        _, trend_beast, sd_vals, cp_dates, cp_probs = plot_beast(df_agg, has_seasonality, metode, nama)
+    except Exception:
+        trend_beast, sd_vals, cp_dates, cp_probs = [], [], [], []
+
+    ci_lower = []
+    ci_upper = []
+    if trend_beast and sd_vals and len(trend_beast) == len(sd_vals):
+        ci_lower = [round(t - 1.96 * s, 2) for t, s in zip(trend_beast, sd_vals)]
+        ci_upper = [round(t + 1.96 * s, 2) for t, s in zip(trend_beast, sd_vals)]
+
+    result = {
+        "pos": nama,
+        "metode": metode,
+        "dates": [d.strftime("%Y-%m-%d") for d in df_agg.index],
+        "values": [round(v, 2) for v in df_agg["val"].tolist()],
+        "trend_stl": [round(v, 2) for v in trend_stl] if len(trend_stl) else [],
+        "trend_beast": [round(v, 2) for v in trend_beast] if len(trend_beast) else [],
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "change_points": cp_dates,
+        "change_point_probs": cp_probs,
+        "has_seasonality": has_seasonality,
+        "has_outlier": outlier_flag,
+        "count": len(df_agg),
+    }
+
+    return _json.dumps(result)
+
+
 # ==========================================================
 # CSS
 # ==========================================================
@@ -652,7 +713,23 @@ with gr.Blocks(css=css, title="Dekomposisi Curah Hujan") as demo:
     api_btn.click(
         fn=api_analyze,
         inputs=[api_pos, api_met, api_th1, api_th2, api_bulan, api_musim],
-        outputs=api_out
+        outputs=api_out,
+        api_name="api_analyze"
+    )
+
+    # API endpoint for uploaded data — hidden
+    api_data_raw = gr.Textbox(visible=False)
+    api_data_met = gr.Textbox(visible=False)
+    api_data_bulan = gr.Textbox(visible=False)
+    api_data_musim = gr.Textbox(visible=False)
+    api_data_out = gr.Textbox(visible=False)
+
+    api_data_btn = gr.Button(visible=False)
+    api_data_btn.click(
+        fn=api_analyze_data,
+        inputs=[api_data_raw, api_data_met, api_data_bulan, api_data_musim],
+        outputs=api_data_out,
+        api_name="api_analyze_data"
     )
 
 

@@ -4,7 +4,7 @@ Dashboard dekomposisi time series curah hujan menggunakan **STL** (Seasonal-Tren
 
 ## Fitur
 
-- 6 metode agregasi (dari thesis)
+- 6 metode agregasi
 - Outlier detection otomatis (IQR)
 - Moving Average fallback untuk data non-seasonal
 - BEAST dengan parameter terkalibrasi
