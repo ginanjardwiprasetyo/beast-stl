@@ -126,47 +126,47 @@ def agregasi(df, metode, bulan=None, musim=None):
         df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
         return df_agg, False
 
-    elif metode == "Kumulatif Bulanan":
-        df_agg = d.groupby(["year", "month"])["Data"].sum().reset_index()
-        df_agg["Tanggal"] = pd.to_datetime(
-            df_agg["year"].astype(str) + "-" + df_agg["month"].astype(str) + "-01"
-        )
-        df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
-        return df_agg, True
+    parts = metode.split(" ")
+    agg_type = parts[0]
+    period = parts[1] if len(parts) > 1 else ""
+    is_khusus = "Khusus" in metode
 
-    elif metode == "Kumulatif Bulanan Khusus":
-        m = int(bulan)
-        df_f = d[d["month"] == m]
-        df_agg = df_f.groupby("year")["Data"].sum().reset_index()
-        df_agg["Tanggal"] = pd.to_datetime(
-            df_agg["year"].astype(str) + f"-{m:02d}-01"
-        )
-        df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
-        return df_agg, False
+    agg_map = {"Kumulatif": "sum", "Rerata": "mean", "Maksimum": "max", "Minimum": "min"}
+    agg_func = agg_map.get(agg_type, "sum")
 
-    elif metode == "Kumulatif Musiman":
-        df_agg = d.groupby(["year", "season"])["Data"].sum().reset_index()
-        smap = {1: "01", 2: "04", 3: "07", 4: "10"}
-        df_agg["Tanggal"] = pd.to_datetime(
-            df_agg["year"].astype(str) + "-" + df_agg["season"].map(smap) + "-01"
-        )
-        df_agg = df_agg.sort_values("Tanggal").reset_index(drop=True)
-        df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
-        return df_agg, True
+    if period == "Bulanan":
+        if is_khusus:
+            m = int(bulan)
+            df_f = d[d["month"] == m]
+            df_agg = df_f.groupby("year")["Data"].agg(agg_func).reset_index()
+            df_agg["Tanggal"] = pd.to_datetime(df_agg["year"].astype(str) + f"-{m:02d}-01")
+            df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
+            return df_agg, False
+        else:
+            df_agg = d.groupby(["year", "month"])["Data"].agg(agg_func).reset_index()
+            df_agg["Tanggal"] = pd.to_datetime(df_agg["year"].astype(str) + "-" + df_agg["month"].astype(str) + "-01")
+            df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
+            return df_agg, True
 
-    elif metode == "Kumulatif Musiman Khusus":
-        s = int(musim)
-        df_f = d[d["season"] == s]
-        df_agg = df_f.groupby("year")["Data"].sum().reset_index()
-        smap = {1: "01", 2: "04", 3: "07", 4: "10"}
-        df_agg["Tanggal"] = pd.to_datetime(
-            df_agg["year"].astype(str) + f"-{smap[s]}-01"
-        )
-        df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
-        return df_agg, False
+    elif period == "Musiman":
+        if is_khusus:
+            s = int(musim)
+            df_f = d[d["season"] == s]
+            df_agg = df_f.groupby("year")["Data"].agg(agg_func).reset_index()
+            smap = {1: "01", 2: "04", 3: "07", 4: "10"}
+            df_agg["Tanggal"] = pd.to_datetime(df_agg["year"].astype(str) + f"-{smap[s]}-01")
+            df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
+            return df_agg, False
+        else:
+            df_agg = d.groupby(["year", "season"])["Data"].agg(agg_func).reset_index()
+            smap = {1: "01", 2: "04", 3: "07", 4: "10"}
+            df_agg["Tanggal"] = pd.to_datetime(df_agg["year"].astype(str) + "-" + df_agg["season"].map(smap) + "-01")
+            df_agg = df_agg.sort_values("Tanggal").reset_index(drop=True)
+            df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
+            return df_agg, True
 
-    elif metode == "Kumulatif Tahunan":
-        df_agg = d.groupby("year")["Data"].sum().reset_index()
+    elif period == "Tahunan":
+        df_agg = d.groupby("year")["Data"].agg(agg_func).reset_index()
         df_agg["Tanggal"] = pd.to_datetime(df_agg["year"].astype(str) + "-01-01")
         df_agg = df_agg.rename(columns={"Data": "val"})[["Tanggal", "val"]]
         return df_agg, False
@@ -541,7 +541,11 @@ def api_analyze_data(raw_data, metode, bulan=None, musim=None):
     df_agg = df_agg.set_index("Tanggal").sort_index()
     df_agg["val"] = df_agg["val"].ffill().bfill()
 
-    has_seasonality = metode in ("Kumulatif Bulanan", "Kumulatif Musiman")
+    parts = metode.split(" ")
+    has_seasonality = False
+    if len(parts) >= 2:
+        period = parts[1]
+        has_seasonality = period in ("Bulanan", "Musiman") and "Khusus" not in metode
     nama = "Data Unggahan"
     outlier_flag = has_outlier(df_agg["val"].values)
 
