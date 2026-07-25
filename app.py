@@ -284,9 +284,10 @@ def plot_beast(df_agg, has_seasonality, metode, nama_pos):
             tcp_minmax=[0, 4],
             torder_minmax=[0, 1],
             tseg_min=tseg_min_val,
-            hasOutlier=not outlier_flag,
+            hasOutlier=outlier_flag,
             mcmc_samples=8000,
-            mcmc_chains=3
+            mcmc_chains=3,
+            mcmc_seed=42
         )
 
         trend = hasil.trend.Y
